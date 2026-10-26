@@ -8,6 +8,7 @@ let micSessionActive = false;
 let lastSuggestion = '';
 let recentQuestion = '';
 let candidateContext = [];
+let liveAnswerHistory = [];
 let liveGenerationId = 0;
 let activeSpeechTurnId = 0;
 function showToast(message) {
@@ -146,7 +147,7 @@ try {
 fields.forEach((id) => $(id).addEventListener('input', saveContext));
 ['mode', 'style'].forEach((id) => $(id).addEventListener('change', saveContext));
 
-async function generate({ live = false } = {}) {
+async function generate({ live = false, includeSessionHistory = false } = {}) {
   const question = $('question').value.trim();
   if (!question) { $('question').focus(); showToast('Add a question first.'); return; }
   const requestId = live ? ++liveGenerationId : 0;
@@ -156,7 +157,7 @@ async function generate({ live = false } = {}) {
     const response = await apiFetch('/api/answer', {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(live ? { accept: 'text/event-stream' } : {}) },
-      body: JSON.stringify({ question, role: $('role').value, company: $('company').value, profile: $('profile').value, resumeContext: $('resumeContext').value, jobDescription: $('jobDescription').value, mode: $('mode').value, style: $('style').value, ...(live ? { liveSession: true, candidateContext, recentQuestion, lastSuggestion } : {}) })
+      body: JSON.stringify({ question, role: $('role').value, company: $('company').value, profile: $('profile').value, resumeContext: $('resumeContext').value, jobDescription: $('jobDescription').value, mode: $('mode').value, style: $('style').value, ...(live ? { liveSession: true, candidateContext, recentQuestion, sessionHistory: includeSessionHistory ? liveAnswerHistory.slice(-4) : [] } : {}) })
     });
     const data = live && response.headers.get('content-type')?.includes('text/event-stream')
       ? await readSessionTurnStream(response, true)
@@ -169,7 +170,10 @@ async function generate({ live = false } = {}) {
       $('transcriptCorrection').textContent = `Possible speech correction: “${question}” → “${correctedQuestion}”.`;
       $('transcriptCorrection').hidden = false;
     }
-    displayAnswer(data); lastSuggestion = data.answer || '';
+    displayAnswer(data);
+    const codeText = Array.isArray(data.codeBlocks) ? data.codeBlocks.map((block) => `${block.language || 'code'}\n${block.code || ''}`).join('\n\n') : '';
+    lastSuggestion = [data.answer || '', codeText].filter(Boolean).join('\n\n');
+    if (live) liveAnswerHistory = [...liveAnswerHistory, { question, answer: lastSuggestion.slice(0, 1_800) }].slice(-4);
     return true;
   } catch (error) {
     if (!live || requestId === liveGenerationId) { $('answerEmpty').hidden = false; showToast(error.message || 'Network error. Please retry.'); }
@@ -194,7 +198,7 @@ function isContextualFollowUp(value) {
   const text = value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
   const hasFollowUpCue = /\b(?:how|why|what|where|when|who|which|explain|clarify|elaborate|expand|mean)\b/i.test(text);
   if (!hasFollowUpCue) return false;
-  if (/\b(?:you said|you mentioned|you stated|you just said|when you said|when you mentioned|your answer|your explanation|earlier you|same thing|same point|that point|that part|what do you mean|how so|why so|can you explain|could you explain|expand on|elaborate on|clarify that)\b/i.test(text)) return true;
+  if (/\b(?:you said|you mentioned|you stated|you just said|when you said|when you mentioned|your answer|your explanation|earlier you|same thing|same point|that point|that part|what do you mean|how so|why so|can you explain|could you explain|expand on|elaborate on|clarify that|what about|how about|what if|the query you gave|the code you gave|explain (?:that|this|it|the query|the code|the answer)|(?:the|that|this|same|previous|above) (?:query|code|answer|solution|example|line|step)|what does (?:the|that|this) (?:query|code|answer) do)\b/i.test(text)) return true;
   const hasReference = /\b(?:that|this|it|those|these|earlier|above|same)\b/i.test(text);
   if (!hasReference) return false;
   const priorWords = new Set(lastSuggestion.toLowerCase().match(/[a-z0-9]{4,}/g) || []);
@@ -284,11 +288,13 @@ async function classifySessionTurn(utterance, source = 'browser') {
     return;
   }
   if (isQuestion) {
+    const isFollowUp = isContextualFollowUp(utterance);
+    if (!isFollowUp) liveAnswerHistory = [];
     recentQuestion = utterance;
     $('question').value = utterance;
     $('transcriptCorrection').hidden = true;
     $('micStatus').textContent = 'Question detected instantly; generating answer…';
-    const generated = await generate({ live: true });
+    const generated = await generate({ live: true, includeSessionHistory: isFollowUp });
     if (micSessionActive && speechTurnId === activeSpeechTurnId) $('micStatus').textContent = generated ? 'Answer ready. Listening for the next turn.' : 'Question detected; answer could not be generated. Still listening.';
     return;
   }
