@@ -18,6 +18,7 @@ let pendingSessionUtterance = '';
 let pendingSessionTurnTimer = null;
 let lastSubmittedSpeech = '';
 let lastSubmittedSpeechAt = 0;
+let lastReadbackAt = 0;
 function showToast(message) {
   const toast = $('toast'); toast.textContent = message; toast.hidden = false;
   clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.hidden = true, 4000);
@@ -123,22 +124,11 @@ async function loadContextFile(file, kind) {
   } catch (error) { status.textContent = error.message; showToast(error.message); }
 }
 function soundsLikeSuggestionReadback(utterance) {
-  const normalize = (value) => value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-  const spoken = normalize(utterance); const suggestion = normalize(lastSuggestion);
-  if (spoken.length < 18 || !suggestion) return false;
-  const fillerWords = new Set(['about', 'after', 'again', 'also', 'because', 'could', 'every', 'first', 'from', 'have', 'just', 'more', 'most', 'over', 'same', 'some', 'that', 'their', 'there', 'these', 'they', 'this', 'through', 'under', 'very', 'what', 'when', 'where', 'which', 'while', 'with', 'would', 'your']);
-  const contentWords = (value) => value.split(' ').filter((word) => word.length > 2 && !fillerWords.has(word));
-  const spokenWords = new Set(contentWords(spoken));
-  const suggestionSequence = contentWords(suggestion);
-  const suggestionWords = new Set(suggestionSequence);
-  const shared = [...spokenWords].filter((word) => suggestionWords.has(word)).length;
-  if (spokenWords.size >= 6 && shared >= 5 && shared / spokenWords.size >= 0.68) return true;
-  // Recognition can split a readback into short chunks. Match the start of the
-  // displayed answer too, so its first chunk does not get mistaken for a question.
-  if (spokenWords.size < 3) return false;
-  const spokenSequence = contentWords(spoken);
-  const prefixMatches = spokenSequence.filter((word, index) => word === suggestionSequence[index]).length;
-  return prefixMatches >= 3 && prefixMatches / spokenSequence.length >= 0.75;
+  if (!lastSuggestion || !speechBuffer?.looksLikeReadback) return false;
+  return speechBuffer.looksLikeReadback(utterance, lastSuggestion);
+}
+function soundsLikeCandidateAcknowledgment(utterance) {
+  return Boolean(speechBuffer?.looksLikeCandidateAcknowledgment?.(utterance));
 }
 function soundsLikeCandidateStatement(utterance) {
   const text = utterance.trim();
@@ -246,6 +236,7 @@ function resetSpeakerTranscripts() {
   $('candidateTranscript').textContent = '';
   $('interviewerTranscriptPanel').hidden = true;
   $('candidateTranscriptPanel').hidden = true;
+  lastReadbackAt = 0;
 }
 function recordCandidateSpeech(utterance, readback = false) {
   candidateContext = [...candidateContext, utterance].slice(-8);
@@ -291,6 +282,7 @@ async function generate({ live = false, includeSessionHistory = false } = {}) {
     displayAnswer(data);
     const codeText = Array.isArray(data.codeBlocks) ? data.codeBlocks.map((block) => `${block.language || 'code'}\n${block.code || ''}`).join('\n\n') : '';
     lastSuggestion = [data.answer || '', codeText].filter(Boolean).join('\n\n');
+    lastReadbackAt = 0;
     if (live) liveAnswerHistory = [...liveAnswerHistory, { question, answer: lastSuggestion.slice(0, 1_800) }].slice(-4);
     return true;
   } catch (error) {
@@ -412,6 +404,17 @@ async function classifySessionTurn(utterance, source = 'browser') {
   // Treat read-aloud of the current suggestion as the candidate's turn, even if
   // ASR adds question punctuation or the sentence contains question-like words.
   if (localReadback) {
+    lastReadbackAt = Date.now();
+    recordCandidateSpeech(utterance, true);
+    return;
+  }
+  // Acknowledgements and short ASR fragments from a read-aloud should stay in
+  // the candidate transcript. They must not trigger an unsolicited new answer.
+  if (soundsLikeCandidateAcknowledgment(utterance)) {
+    recordCandidateSpeech(utterance, true);
+    return;
+  }
+  if (Date.now() - lastReadbackAt < 12_000 && !isLikelyInterviewQuestion(utterance) && !isFollowUp) {
     recordCandidateSpeech(utterance, true);
     return;
   }
