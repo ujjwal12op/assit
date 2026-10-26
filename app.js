@@ -180,8 +180,14 @@ async function generate({ live = false } = {}) {
   return false;
 }
 function isLikelyInterviewQuestion(value) {
-  const text = value.trim().replace(/\s+/g, ' ').replace(/^(?:(?:um|uh|hmm|so|okay|well|and|right|next)[, ]+)+/i, '');
-  return text.includes('?') || /^(?:what|why|how|when|where|who|which)(?:['’]s|\s+(?:is|are|was|were|do|does|did|can|could|would|should|will|have|has|had))\b/i.test(text) || /^(?:can|could|would|should|will|do|does|did|is|are|have|has)\b/i.test(text) || /^(?:tell me (?:about|why|how|what|when|where)|walk me through|explain|describe|compare|write|implement|solve|outline|show me|give me an example of|please (?:explain|describe|compare|write|implement|solve)|i was wondering|i(?:'d| would) (?:like|love) (?:you to|to hear)|i want you to|design (?:a|an|the)|build (?:a|an|the)|create (?:a|an|the)|given (?:a|an|the)|find (?:a|an|the|all|the first|the last)|return (?:a|an|the|the value|the result|the answer))\b/i.test(text);
+  const text = value.trim().replace(/\s+/g, ' ')
+    .replace(/^(?:(?:um|uh|hmm|so|okay|well|and|right|next|now)[, ]+)+/i, '')
+    .replace(/^(?:(?:the|my)\s+)?question\s+(?:is|for you is)[:, ]+/i, '');
+  if (text.includes('?')) return true;
+  if (/^(?:what|why|how|when|where|who|which)\s+(?:i|we)\b/i.test(text)) return false;
+  return /^(?:what|why|how|when|where|who|which)\b/i.test(text)
+    || /^(?:can|could|would|should|will|do|does|did|is|are|have|has)\b/i.test(text)
+    || /^(?:tell\s*(?:me|us)|let\s+me\s+know|walk\s*(?:me|us)(?:\s+through)?|talk\s*(?:me|us)(?:\s+through)?|let'?s\s+(?:talk|discuss|explore)|explain|describe|compare|write|implement|solve|calculate|outline|show\s+(?:me|us)|give\s+(?:me|us)\s+an\s+example|please\s+(?:explain|describe|compare|write|implement|solve)|i\s+was\s+wondering|i(?:'d|\s+would)\s+(?:like|love)\s+(?:you\s+to|to\s+(?:ask|hear|know|understand))|i\s+want\s+(?:you\s+to|to\s+ask)|i(?:'m|\s+am)\s+(?:curious|interested\s+in)|design\s+(?:a|an|the)|build\s+(?:a|an|the)|create\s+(?:a|an|the)|given\s+(?:a|an|the)|find\s+(?:a|an|the|all|the\s+first|the\s+last)|return\s+(?:a|an|the|the\s+value|the\s+result|the\s+answer)|you(?:'re|\s+are)\s+given|suppose|imagine|assume|consider|let'?s\s+say|what\s+about|how\s+about|your\s+(?:thoughts|experience|approach)\s+(?:on|to|with))\b/i.test(text);
 }
 function partialJsonStringValue(source, key) {
   const marker = '"' + key + '"';
@@ -540,18 +546,18 @@ else {
     instance.onresult = (event) => {
       if (instance !== recognition || !micSessionActive) return;
       let interim = '';
-      let sawFinal = false;
+      const finalParts = [];
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript.trim();
         if (event.results[i].isFinal) {
-          if (transcript) {
-            sawFinal = true;
-            $('question').value = transcript;
-            enqueueSessionTurn(transcript);
-          }
+          if (transcript) finalParts.push(transcript);
         } else if (transcript) interim += transcript;
       }
-      if (interim && !sawFinal) $('question').value = interim;
+      if (finalParts.length) {
+        const transcript = finalParts.join(' ').trim();
+        $('question').value = transcript;
+        enqueueSessionTurn(transcript);
+      } else if (interim) $('question').value = interim;
     };
     instance.onerror = (event) => {
       if (instance !== recognition) return;
