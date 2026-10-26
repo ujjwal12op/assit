@@ -245,7 +245,7 @@ async function classifySessionTurn(utterance, source = 'browser') {
       displayAnswer(data); lastSuggestion = data.answer;
       $('micStatus').textContent = `Interviewer question detected · ${(Number(data.latencyMs || 0) / 1000).toFixed(1)}s`;
     } else if (data.classification === 'candidate_answer') {
-      if (source === 'mobile' && $('question').value === utterance) $('question').value = '';
+      if ($('question').value === utterance) $('question').value = '';
       const readback = data.isReadingSuggestion === true || soundsLikeSuggestionReadback(utterance);
       if (!readback) candidateContext = [...candidateContext, data.correctedUtterance || utterance].slice(-8);
       $('micStatus').textContent = readback ? 'Your spoken response was recognized; no new question generated.' : 'Your response was recognized; waiting for the next interviewer question.';
@@ -328,6 +328,7 @@ if (mobileBrowser && SpeechRecognition) {
           $('micStatus').textContent = 'Speech recognized. Checking the question…';
           enqueueSessionTurn(transcript, 'mobile');
         } else if (interim) {
+          $('question').value = interim;
           $('micStatus').textContent = 'Hearing: ' + interim.slice(-120);
         }
       };
@@ -516,10 +517,19 @@ else {
     };
     instance.onresult = (event) => {
       if (instance !== recognition || !micSessionActive) return;
+      let interim = '';
+      let sawFinal = false;
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        if (!event.results[i].isFinal) continue;
-        enqueueSessionTurn(event.results[i][0].transcript.trim());
+        const transcript = event.results[i][0].transcript.trim();
+        if (event.results[i].isFinal) {
+          if (transcript) {
+            sawFinal = true;
+            $('question').value = transcript;
+            enqueueSessionTurn(transcript);
+          }
+        } else if (transcript) interim += transcript;
       }
+      if (interim && !sawFinal) $('question').value = interim;
     };
     instance.onerror = (event) => {
       if (instance !== recognition) return;
