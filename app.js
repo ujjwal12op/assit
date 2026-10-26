@@ -147,6 +147,23 @@ function soundsLikeCandidateStatement(utterance) {
 function soundsLikeFirstPersonAnswer(utterance) {
   return /\b(?:i|me|my|mine|myself|we|us|our|ours|ourselves)\b/i.test(utterance);
 }
+function interviewDomainContext() {
+  return [ $('role').value, $('profile').value, $('resumeContext').value, $('jobDescription').value ].join(' ').toLowerCase();
+}
+function correctDomainSpeechTerms(utterance) {
+  const context = interviewDomainContext();
+  const isDataEngineering = /\bdata\s*(?:engineer|engineering)|\b(?:pyspark|apache spark|spark sql|airflow|databricks|data pipeline|etl|elt|hadoop|kafka|snowflake|data warehouse)\b/i.test(context);
+  if (!isDataEngineering) return utterance;
+  let corrected = utterance
+    .replace(/\b(?:pie|pies|pi|py)\s*[- ]\s*(?:s)?park\b/gi, 'PySpark')
+    .replace(/\bpys\s*park\b/gi, 'PySpark')
+    .replace(/\bair\s+flow\b/gi, 'Airflow')
+    .replace(/\bdata\s+bricks\b/gi, 'Databricks');
+  if (/\b(?:what|why|how|when|where|who|which|explain|define|meaning|mean|workflow|pipeline|airflow|spark|dependency|dependencies|graph|task)\b/i.test(corrected) || /^\s*(?:(?:a|the)\s+)?tag\s*[?.!]*\s*$/i.test(corrected)) {
+    corrected = corrected.replace(/\btag\b/gi, 'DAG');
+  }
+  return corrected;
+}
 function addTranscriptLine(role, utterance) {
   const transcript = role === 'interviewer' ? interviewerTranscript : candidateTranscript;
   const clean = utterance.trim();
@@ -383,7 +400,13 @@ function enqueueSessionTurn(utterance, source = 'browser') {
     if (!stableUtterance || (stableNorm === lastSubmittedSpeech && Date.now() - lastSubmittedSpeechAt < 5_000)) return;
     lastSubmittedSpeech = stableNorm;
     lastSubmittedSpeechAt = Date.now();
-    classifySessionTurn(stableUtterance, source).catch(() => {});
+    const contextCorrectedUtterance = correctDomainSpeechTerms(stableUtterance);
+    if (contextCorrectedUtterance !== stableUtterance) {
+      $('question').value = contextCorrectedUtterance;
+      $('transcriptCorrection').textContent = `Role-aware speech correction: “${stableUtterance}” → “${contextCorrectedUtterance}”.`;
+      $('transcriptCorrection').hidden = false;
+    }
+    classifySessionTurn(contextCorrectedUtterance, source).catch(() => {});
   }, 350);
 }
 function resetSpeechTurnBuffer() {
