@@ -11,6 +11,10 @@ let candidateContext = [];
 let liveAnswerHistory = [];
 let liveGenerationId = 0;
 let activeSpeechTurnId = 0;
+let pendingSessionUtterance = '';
+let pendingSessionTurnTimer = null;
+let lastSubmittedSpeech = '';
+let lastSubmittedSpeechAt = 0;
 function showToast(message) {
   const toast = $('toast'); toast.textContent = message; toast.hidden = false;
   clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.hidden = true, 4000);
@@ -191,7 +195,9 @@ function isLikelyInterviewQuestion(value) {
   if (/^(?:what|why|how|when|where|who|which)\s+(?:i|we)\b/i.test(text)) return false;
   return /^(?:what|why|how|when|where|who|which)\b/i.test(text)
     || /^(?:can|could|would|should|will|do|does|did|is|are|have|has)\b/i.test(text)
-    || /^(?:tell\s*(?:me|us)|let\s+me\s+know|walk\s*(?:me|us)(?:\s+through)?|talk\s*(?:me|us)(?:\s+through)?|let'?s\s+(?:talk|discuss|explore)|explain|describe|compare|write|implement|solve|calculate|outline|show\s+(?:me|us)|give\s+(?:me|us)\s+an\s+example|please\s+(?:explain|describe|compare|write|implement|solve)|i\s+was\s+wondering|i(?:'d|\s+would)\s+(?:like|love)\s+(?:you\s+to|to\s+(?:ask|hear|know|understand))|i\s+want\s+(?:you\s+to|to\s+ask)|i(?:'m|\s+am)\s+(?:curious|interested\s+in)|design\s+(?:a|an|the)|build\s+(?:a|an|the)|create\s+(?:a|an|the)|given\s+(?:a|an|the)|find\s+(?:a|an|the|all|the\s+first|the\s+last)|return\s+(?:a|an|the|the\s+value|the\s+result|the\s+answer)|you(?:'re|\s+are)\s+given|suppose|imagine|assume|consider|let'?s\s+say|what\s+about|how\s+about|your\s+(?:thoughts|experience|approach)\s+(?:on|to|with))\b/i.test(text);
+    || /^(?:tell\s*(?:me|us)|let\s+me\s+know|walk\s*(?:me|us)(?:\s+through)?|talk\s*(?:me|us)(?:\s+through)?|let'?s\s+(?:talk|discuss|explore)|explain|describe|compare|difference\s+between|differentiate|write|implement|solve|calculate|outline|show\s+(?:me|us)|give\s+(?:me|us)\s+an\s+example|please\s+(?:explain|describe|compare|write|implement|solve)|i\s+was\s+wondering|i(?:'d|\s+would)\s+(?:like|love)\s+(?:you\s+to|to\s+(?:ask|hear|know|understand))|i\s+want\s+(?:you\s+to|to\s+ask)|i(?:'m|\s+am)\s+(?:curious|interested\s+in)|design\s+(?:a|an|the)|build\s+(?:a|an|the)|create\s+(?:a|an|the)|given\s+(?:a|an|the)|find\s+(?:a|an|the|all|the\s+first|the\s+last)|return\s+(?:a|an|the|the\s+value|the\s+result|the\s+answer)|you(?:'re|\s+are)\s+given|suppose|imagine|assume|consider|let'?s\s+say|what\s+about|how\s+about|your\s+(?:thoughts|experience|approach)\s+(?:on|to|with))\b/i.test(text)
+    || /\b(?:can you|could you|would you|do you|does it|how would|what would|what happens|why does|how does|what is the difference|what's the difference|tell me why|explain how|explain why)\b/i.test(text)
+    || /^(?:and|so)\s+(?:the\s+)?(?:difference|approach|architecture|design|solution|query|code)\b/i.test(text);
 }
 function isContextualFollowUp(value) {
   if (!lastSuggestion) return false;
@@ -282,7 +288,12 @@ async function classifySessionTurn(utterance, source = 'browser') {
   if (!micSessionActive) return;
   const speechTurnId = ++activeSpeechTurnId;
   const localReadback = soundsLikeSuggestionReadback(utterance);
-  const isQuestion = isLikelyInterviewQuestion(utterance) || isContextualFollowUp(utterance);
+  const hasClearCandidateLead = soundsLikeCandidateStatement(utterance);
+  // The first meaningful turn in a session is normally the interviewer's opening
+  // question. Browser ASR often drops its opening words or punctuation, so don't
+  // discard that first turn just because the transcript is imperfect.
+  const isFirstInterviewerTurn = !recentQuestion && !lastSuggestion && !hasClearCandidateLead;
+  const isQuestion = isLikelyInterviewQuestion(utterance) || isContextualFollowUp(utterance) || isFirstInterviewerTurn;
   if (localReadback && !isQuestion) {
     recordCandidateSpeech(utterance, true);
     return;
@@ -309,7 +320,40 @@ initializeAccess();
 function enqueueSessionTurn(utterance, source = 'browser') {
   const clean = utterance.trim();
   if (!clean || clean.length < 3) return;
-  classifySessionTurn(clean, source).catch(() => {});
+  const normalized = clean.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  if (normalized === lastSubmittedSpeech && Date.now() - lastSubmittedSpeechAt < 5_000) return;
+  if (pendingSessionUtterance) {
+    const previous = pendingSessionUtterance.trim();
+    const previousNorm = previous.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const nextNorm = normalized;
+    if (previousNorm === nextNorm || previousNorm.startsWith(nextNorm + ' ')) return;
+    if (nextNorm.startsWith(previousNorm + ' ')) pendingSessionUtterance = clean;
+    else {
+      const previousWords = previous.split(/\s+/);
+      const nextWords = clean.split(/\s+/);
+      let overlap = Math.min(previousWords.length, nextWords.length);
+      while (overlap > 0 && previousWords.slice(-overlap).join(' ').toLowerCase() !== nextWords.slice(0, overlap).join(' ').toLowerCase()) overlap--;
+      pendingSessionUtterance = `${previous} ${nextWords.slice(overlap).join(' ')}`.trim();
+    }
+  } else pendingSessionUtterance = clean;
+  clearTimeout(pendingSessionTurnTimer);
+  pendingSessionTurnTimer = setTimeout(() => {
+    pendingSessionTurnTimer = null;
+    const stableUtterance = pendingSessionUtterance.trim();
+    pendingSessionUtterance = '';
+    const stableNorm = stableUtterance.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    if (!stableUtterance || (stableNorm === lastSubmittedSpeech && Date.now() - lastSubmittedSpeechAt < 5_000)) return;
+    lastSubmittedSpeech = stableNorm;
+    lastSubmittedSpeechAt = Date.now();
+    classifySessionTurn(stableUtterance, source).catch(() => {});
+  }, 350);
+}
+function resetSpeechTurnBuffer() {
+  clearTimeout(pendingSessionTurnTimer);
+  pendingSessionTurnTimer = null;
+  pendingSessionUtterance = '';
+  lastSubmittedSpeech = '';
+  lastSubmittedSpeechAt = 0;
 }
 $('generateBtn').addEventListener('click', generate);
 document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); generate(); } });
@@ -419,7 +463,7 @@ if (mobileBrowser && SpeechRecognition) {
   $('micBtn').addEventListener('click', () => {
     if (micSessionActive) { stopMobileRecognitionSession(); return; }
     micSessionActive = true;
-    candidateContext = []; recentQuestion = ''; lastSuggestion = ''; turnQueue = Promise.resolve();
+    resetSpeechTurnBuffer(); candidateContext = []; recentQuestion = ''; lastSuggestion = ''; liveAnswerHistory = []; turnQueue = Promise.resolve();
     $('question').value = ''; $('transcriptCorrection').hidden = true; $('answerContent').hidden = true; $('answerEmpty').hidden = false;
     $('micStatus').textContent = 'Starting mobile speech recognition…';
     startMobileRecognition();
@@ -495,7 +539,7 @@ if (mobileBrowser && SpeechRecognition) {
   }
   $('micBtn').addEventListener('click', async () => {
     if (micSessionActive) { await stopMobileSession(); return; }
-    micSessionActive = true; candidateContext = []; recentQuestion = ''; lastSuggestion = ''; turnQueue = Promise.resolve();
+    micSessionActive = true; resetSpeechTurnBuffer(); candidateContext = []; recentQuestion = ''; lastSuggestion = ''; liveAnswerHistory = []; turnQueue = Promise.resolve();
     $('question').value = ''; $('transcriptCorrection').hidden = true; $('answerContent').hidden = true; $('answerEmpty').hidden = false;
     $('micStatus').textContent = 'Starting mobile microphone…';
     try { await startMobileSession(); }
@@ -609,7 +653,7 @@ else {
   $('micBtn').addEventListener('click', () => {
     if (micSessionActive) stopMicSession();
     else {
-      micSessionActive = true; candidateContext = []; recentQuestion = ''; lastSuggestion = ''; turnQueue = Promise.resolve();
+      micSessionActive = true; resetSpeechTurnBuffer(); candidateContext = []; recentQuestion = ''; lastSuggestion = ''; liveAnswerHistory = []; turnQueue = Promise.resolve();
       $('question').value = ''; $('transcriptCorrection').hidden = true; $('answerContent').hidden = true; $('answerEmpty').hidden = false;
       $('micStatus').textContent = 'Starting microphone…';
       try { startRecognition(); } catch { micSessionActive = false; $('micStatus').textContent = 'Could not start microphone. Try again or type the question.'; }
