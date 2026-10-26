@@ -150,7 +150,7 @@ function soundsLikeFirstPersonAnswer(utterance) {
 function interviewDomainContext() {
   return [ $('role').value, $('profile').value, $('resumeContext').value, $('jobDescription').value ].join(' ');
 }
-function correctDomainSpeechTerms(utterance) {
+function interviewDomainTerms() {
   const context = interviewDomainContext();
   const isDataEngineering = /\bdata\s*(?:engineer|engineering)|\b(?:pyspark|apache spark|spark sql|airflow|databricks|data pipeline|etl|elt|hadoop|kafka|snowflake|data warehouse)\b/i.test(context);
   const domainTerms = new Set();
@@ -160,6 +160,11 @@ function correctDomainSpeechTerms(utterance) {
   // Reuse acronyms and mixed-case technical names actually present in the
   // candidate's role, profile, resume, and job description.
   for (const term of context.match(/\b(?:[A-Z]{2,8}|[A-Z][a-z]+[A-Z][A-Za-z0-9]*)\b/g) || []) domainTerms.add(term);
+  return domainTerms;
+}
+function correctDomainSpeechTerms(utterance) {
+  const domainTerms = interviewDomainTerms();
+  const isDataEngineering = /\bdata\s*(?:engineer|engineering)|\b(?:pyspark|apache spark|spark sql|airflow|databricks|data pipeline|etl|elt|hadoop|kafka|snowflake|data warehouse)\b/i.test(interviewDomainContext());
   let corrected = utterance;
   if (domainTerms.has('PySpark') || isDataEngineering) {
     corrected = corrected
@@ -194,6 +199,27 @@ function correctDomainSpeechTerms(utterance) {
     const candidates = acronyms.filter((expected) => isOneEditApart(heard.toUpperCase(), expected));
     return candidates.length === 1 ? candidates[0] : heard;
   });
+}
+function selectSpeechAlternative(result) {
+  if (!result?.length) return '';
+  const terms = [...interviewDomainTerms()];
+  let bestText = result[0]?.transcript || '';
+  let bestScore = -Infinity;
+  for (let index = 0; index < result.length; index++) {
+    const alternative = result[index];
+    const raw = typeof alternative?.transcript === 'string' ? alternative.transcript.trim() : '';
+    if (!raw) continue;
+    const corrected = correctDomainSpeechTerms(raw);
+    const normalized = ` ${corrected.toLowerCase().replace(/[^a-z0-9+#]+/g, ' ')} `;
+    let score = (Number(alternative.confidence) || 0) * 2 - index * 0.01;
+    if (corrected.toLowerCase() !== raw.toLowerCase()) score += 1;
+    for (const term of terms) {
+      const normalizedTerm = term.toLowerCase().replace(/[^a-z0-9+#]+/g, ' ').trim();
+      if (normalizedTerm.length >= 2 && normalized.includes(` ${normalizedTerm} `)) score += 2;
+    }
+    if (score > bestScore) { bestScore = score; bestText = corrected; }
+  }
+  return bestText;
 }
 function addTranscriptLine(role, utterance) {
   const transcript = role === 'interviewer' ? interviewerTranscript : candidateTranscript;
@@ -489,6 +515,7 @@ if (mobileBrowser && SpeechRecognition) {
       mobileRecognizer = instance;
       instance.continuous = false;
       instance.interimResults = true;
+      instance.maxAlternatives = 5;
       instance.lang = navigator.language || 'en-US';
       instance.onstart = () => {
         if (instance !== mobileRecognizer || !micSessionActive) return;
@@ -502,7 +529,7 @@ if (mobileBrowser && SpeechRecognition) {
         const finalParts = [];
         let interim = '';
         for (let i = event.resultIndex; i < event.results.length; i++) {
-          const text = event.results[i][0]?.transcript?.trim() || '';
+          const text = selectSpeechAlternative(event.results[i]).trim();
           if (event.results[i].isFinal) finalParts.push(text);
           else interim += text;
         }
@@ -678,7 +705,7 @@ else {
     if (!micSessionActive) return;
     const instance = new SpeechRecognition();
     recognition = instance;
-    instance.continuous = true; instance.interimResults = true; instance.lang = navigator.language || 'en-US';
+    instance.continuous = true; instance.interimResults = true; instance.maxAlternatives = 5; instance.lang = navigator.language || 'en-US';
     startupTimer = setTimeout(() => {
       if (instance !== recognition || !micSessionActive) return;
       $('micStatus').textContent = 'Speech service did not connect; retrying…';
@@ -704,7 +731,7 @@ else {
       let interim = '';
       const finalParts = [];
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript.trim();
+        const transcript = selectSpeechAlternative(event.results[i]).trim();
         if (event.results[i].isFinal) {
           if (transcript) finalParts.push(transcript);
         } else if (transcript) interim += transcript;
