@@ -11,3 +11,40 @@ main{margin-left:235px;max-width:1260px;padding:0 48px 28px}.topbar{height:68px;
 .transcript-correction{font-size:11px;line-height:1.45;color:#735f2d;background:#fbf5e8;border:1px solid #f1e5c8;padding:7px 9px;border-radius:6px;margin-top:7px}
 .topbar-actions{display:flex;align-items:center;gap:12px}.login-screen{min-height:100vh;padding:24px;display:grid;place-items:center;background:var(--paper)}.login-card{width:min(100%,390px);background:#fff;border:1px solid var(--line);border-radius:14px;padding:30px;box-shadow:0 10px 35px #263b2a0b}.login-card .brand-icon{margin-bottom:18px}.login-card h1{font-size:27px;margin:0 0 7px}.login-card p{color:var(--muted);font-size:13px;margin:0 0 22px}.login-card form label{display:block;font-size:10px;font-weight:700;letter-spacing:.7px;color:#89938b}.login-card form input{margin-bottom:14px}.login-card .primary{width:100%;font-size:13px}.login-status{font-size:12px;color:#a44c42;margin-top:10px;min-height:18px}
 @media(max-width:700px){.document-fields{grid-template-columns:1fr}}
+
+/* Workspace view tabs and answer-first interview layout */
+.view-tabs{display:flex;gap:6px;width:max-content;max-width:100%;padding:5px;margin:13px 0 16px;background:#edf0eb;border:1px solid #e7ebe5;border-radius:10px}
+.view-tab{border:0;background:transparent;color:#778078;border-radius:7px;padding:8px 15px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+.view-tab:hover{color:var(--green)}
+.view-tab.active{background:#fff;color:var(--green);box-shadow:0 1px 4px #263b2a12}
+.view-tab:focus-visible,.nav-item:focus-visible{outline:2px solid #7da18a;outline-offset:2px}
+.panel-heading{padding:27px 0 17px}
+.panel-heading h1{font-size:29px;margin:7px 0}
+.panel-heading p{margin:0;color:#778078;font-size:13px}
+.interview-settings{order:2;padding:16px 19px;margin-top:14px}
+.settings-heading{display:flex;align-items:center;gap:9px;margin-bottom:10px}
+.interview-settings .lower-fields{margin-top:0}
+#interviewPanel{display:flex;flex-direction:column}
+#interviewPanel .workspace-grid{order:1;grid-template-columns:1fr;gap:14px;margin-top:0}
+#interviewPanel .answer-card{min-height:340px;border-color:#d9e5da;box-shadow:0 4px 15px #263b2a0a}
+#interviewPanel .answer-card .section-head{margin-bottom:21px}
+#interviewPanel .answer-empty{height:auto;min-height:220px}
+#interviewPanel .answer-content{min-height:220px}
+#interviewPanel .answer-text{font-size:16px;line-height:1.75}
+#interviewPanel .question-card{min-height:auto}
+#interviewPanel .question-input{height:112px}
+@media(max-width:700px){
+  .topbar{height:auto;min-height:51px;gap:8px;flex-wrap:wrap;padding:9px 0}
+  .view-tabs{display:grid;grid-template-columns:1fr 1fr;width:100%;margin:11px 0 13px}
+  .view-tab{padding:10px 6px;font-size:12px}
+  .panel-heading{padding:21px 1px 15px}
+  .panel-heading h1{font-size:25px}
+  #interviewPanel .welcome{display:none}
+  #interviewPanel .workspace-grid{display:flex;flex-direction:column;gap:12px}
+  #interviewPanel .answer-card{order:0;min-height:310px;padding:18px}
+  #interviewPanel .question-card{order:1;padding:17px}
+  #interviewPanel .answer-empty{min-height:180px}
+  #interviewPanel .answer-content{min-height:0}
+  #interviewPanel .answer-text{font-size:16px;line-height:1.7}
+  .interview-settings{padding:14px 16px;margin-top:12px}
+}

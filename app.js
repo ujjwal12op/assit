@@ -201,7 +201,21 @@ $('generateBtn').addEventListener('click', generate);
 document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); generate(); } });
 $('clearBtn').addEventListener('click', () => { $('question').value = ''; $('transcriptCorrection').hidden = true; $('answerContent').hidden = true; $('answerEmpty').hidden = false; $('question').focus(); });
 $('copyBtn').addEventListener('click', async () => { try { await navigator.clipboard.writeText(answerForCopy || $('answerText').textContent); showToast('Answer copied.'); } catch { showToast('Clipboard access is unavailable.'); } });
-$('profileNav').addEventListener('click', () => { $('profile').focus(); $('profile').scrollIntoView({ behavior: 'smooth', block: 'center' }); });
+function setWorkspaceView(view) {
+  const showProfile = view === 'profile';
+  $('profilePanel').hidden = !showProfile;
+  $('interviewPanel').hidden = showProfile;
+  $('currentViewName').textContent = showProfile ? 'Candidate profile' : 'Interview room';
+  document.querySelectorAll('[data-view-target]').forEach((button) => {
+    const selected = button.dataset.viewTarget === view;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-current', selected ? 'page' : 'false');
+  });
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+document.querySelectorAll('[data-view-target]').forEach((button) => {
+  button.addEventListener('click', () => setWorkspaceView(button.dataset.viewTarget));
+});
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const mobileBrowser = Boolean(navigator.userAgentData?.mobile) || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
