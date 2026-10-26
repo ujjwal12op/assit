@@ -221,14 +221,6 @@ function selectSpeechAlternative(result) {
   }
   return bestText;
 }
-function addSpeechContextBias(instance) {
-  const Phrase = window.SpeechRecognitionPhrase;
-  if (typeof Phrase !== 'function' || !('phrases' in instance)) return;
-  const terms = [...interviewDomainTerms()].filter((term) => term.length >= 2).slice(0, 100);
-  try {
-    instance.phrases = terms.map((phrase) => new Phrase(phrase, 4));
-  } catch { /* Contextual biasing is optional and not supported by every browser. */ }
-}
 function addTranscriptLine(role, utterance) {
   const transcript = role === 'interviewer' ? interviewerTranscript : candidateTranscript;
   const clean = utterance.trim();
@@ -527,7 +519,6 @@ if (mobileBrowser && SpeechRecognition) {
       instance.interimResults = true;
       instance.maxAlternatives = 5;
       instance.lang = navigator.language || 'en-US';
-      addSpeechContextBias(instance);
       instance.onstart = () => {
         if (instance !== mobileRecognizer || !micSessionActive) return;
         mobileRetryDelay = 400;
@@ -722,7 +713,6 @@ else {
     const instance = new SpeechRecognition();
     recognition = instance;
     instance.continuous = true; instance.interimResults = true; instance.maxAlternatives = 5; instance.lang = navigator.language || 'en-US';
-    addSpeechContextBias(instance);
     startupTimer = setTimeout(() => {
       if (instance !== recognition || !micSessionActive) return;
       $('micStatus').textContent = 'Speech service did not connect; retrying…';
