@@ -316,9 +316,13 @@ function isLikelyInterviewQuestion(value) {
 function isContextualFollowUp(value) {
   if (!lastSuggestion) return false;
   const text = value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-  const hasFollowUpCue = /\b(?:how|why|what|where|when|who|which|explain|clarify|elaborate|expand|mean)\b/i.test(text);
+  const hasFollowUpCue = /\b(?:how|why|what|where|when|who|which|explain|clarify|elaborate|expand|mean|use|using|approach|method|version|alternative|instead)\b/i.test(text);
   if (!hasFollowUpCue) return false;
   if (/\b(?:you said|you mentioned|you stated|you just said|when you said|when you mentioned|your answer|your explanation|earlier you|same thing|same point|that point|that part|what do you mean|how so|why so|can you explain|could you explain|expand on|elaborate on|clarify that|what about|how about|what if|the query you gave|the code you gave|explain (?:that|this|it|the query|the code|the answer)|(?:the|that|this|same|previous|above) (?:query|code|answer|solution|example|line|step)|what does (?:the|that|this) (?:query|code|answer) do)\b/i.test(text)) return true;
+  // Follow-up requests often name a different technique while referring to
+  // "this particular question"; they may not repeat any words from the earlier
+  // answer, so don't require lexical overlap in that case.
+  if (/\b(?:(?:this|that|same|previous|above|current)\s+(?:particular\s+)?(?:question|query|problem|code|answer|solution|approach)|particular\s+(?:question|query|problem|code|answer|solution))\b/i.test(text)) return true;
   const hasReference = /\b(?:that|this|it|those|these|earlier|above|same)\b/i.test(text);
   if (!hasReference) return false;
   const priorWords = new Set(lastSuggestion.toLowerCase().match(/[a-z0-9]{4,}/g) || []);
