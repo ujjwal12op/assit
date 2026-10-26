@@ -189,7 +189,86 @@ $('copyBtn').addEventListener('click', async () => { try { await navigator.clipb
 $('profileNav').addEventListener('click', () => { $('profile').focus(); $('profile').scrollIntoView({ behavior: 'smooth', block: 'center' }); });
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-if (!SpeechRecognition) { $('micBtn').disabled = true; $('micStatus').textContent = 'Speech input is unavailable here. Type your question instead.'; }
+const mobileBrowser = Boolean(navigator.userAgentData?.mobile) || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const mobileRecorderAvailable = mobileBrowser && Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+if (mobileRecorderAvailable) {
+  let mobileStream = null, mobileRecorder = null, mobileAudioContext = null, mobileAnalyser = null, mobileFrame = null, mobileWakeLock = null;
+  let mobileChunks = [], mobileSpeechAt = 0, mobileRecordingAt = 0, mobileMimeType = '';
+  const mobileSamples = new Float32Array(512);
+  async function transcribeMobileAudio(blob) {
+    if (!micSessionActive || blob.size < 1200) return;
+    $('micStatus').textContent = 'Transcribing speech…';
+    const audioData = await fileToBase64(blob);
+    const response = await apiFetch('/api/transcribe-turn', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ audioData, audioMimeType: (blob.type || mobileMimeType).split(';')[0], role: $('role').value, profile: $('profile').value, resumeContext: $('resumeContext').value, jobDescription: $('jobDescription').value }) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not transcribe this audio.');
+    if (result.transcript?.trim()) enqueueSessionTurn(result.transcript.trim());
+    if (micSessionActive) $('micStatus').textContent = 'Listening continuously. Keep this tab open while interviewing.';
+  }
+  function startMobileRecording() {
+    if (!micSessionActive || !mobileStream || mobileRecorder?.state === 'recording') return;
+    mobileChunks = [];
+    try {
+      mobileRecorder = new MediaRecorder(mobileStream, mobileMimeType ? { mimeType: mobileMimeType } : undefined);
+      mobileRecordingAt = Date.now();
+      mobileRecorder.ondataavailable = (event) => { if (event.data?.size) mobileChunks.push(event.data); };
+      mobileRecorder.onerror = () => { $('micStatus').textContent = 'Mobile audio capture interrupted; continuing to listen…'; };
+      mobileRecorder.onstop = () => {
+        const blob = new Blob(mobileChunks, { type: mobileMimeType || mobileChunks[0]?.type || 'audio/webm' });
+        mobileChunks = [];
+        transcribeMobileAudio(blob).catch((error) => { if (micSessionActive) $('micStatus').textContent = error.message || 'Transcription failed; still listening.'; });
+      };
+      mobileRecorder.start();
+    } catch { $('micStatus').textContent = 'Could not start mobile audio capture. Check microphone permission and try again.'; }
+  }
+  function stopMobileRecording() { if (mobileRecorder?.state === 'recording') { try { mobileRecorder.stop(); } catch { /* Already stopped. */ } } }
+  function monitorMobileAudio() {
+    if (!micSessionActive || !mobileAnalyser) return;
+    mobileAnalyser.getFloatTimeDomainData(mobileSamples);
+    let sum = 0; for (const sample of mobileSamples) sum += sample * sample;
+    const level = Math.sqrt(sum / mobileSamples.length), now = Date.now();
+    if (level > 0.012) { mobileSpeechAt = now; if (mobileRecorder?.state !== 'recording') startMobileRecording(); }
+    if (mobileRecorder?.state === 'recording') {
+      const duration = now - mobileRecordingAt;
+      if (duration > 14_000 || (mobileSpeechAt && now - mobileSpeechAt > 1_700 && duration > 1_600)) stopMobileRecording();
+    }
+    mobileFrame = requestAnimationFrame(monitorMobileAudio);
+  }
+  async function stopMobileSession() {
+    micSessionActive = false;
+    $('micBtn').setAttribute('aria-pressed', 'false'); $('micBtn').innerHTML = '<span>●</span> Start session';
+    $('micStatus').textContent = 'Session stopped. Spoken turns are not saved.';
+    if (mobileFrame) cancelAnimationFrame(mobileFrame);
+    mobileFrame = null; stopMobileRecording();
+    mobileStream?.getTracks().forEach((track) => track.stop()); mobileStream = null;
+    if (mobileAudioContext && mobileAudioContext.state !== 'closed') await mobileAudioContext.close().catch(() => {});
+    mobileAudioContext = null; mobileAnalyser = null;
+    try { await mobileWakeLock?.release(); } catch { /* The browser may release it automatically. */ }
+    mobileWakeLock = null;
+  }
+  async function startMobileSession() {
+    mobileStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    mobileAudioContext = new AudioContext(); await mobileAudioContext.resume();
+    mobileAnalyser = mobileAudioContext.createAnalyser(); mobileAnalyser.fftSize = 512;
+    mobileAudioContext.createMediaStreamSource(mobileStream).connect(mobileAnalyser);
+    mobileMimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac', 'audio/ogg;codecs=opus'].find((type) => MediaRecorder.isTypeSupported(type)) || '';
+    try { if (navigator.wakeLock?.request) mobileWakeLock = await navigator.wakeLock.request('screen'); } catch { /* Optional enhancement. */ }
+    $('micBtn').setAttribute('aria-pressed', 'true'); $('micBtn').innerHTML = '<span>●</span> Stop session';
+    $('micStatus').textContent = 'Mobile transcription is ready. Speak normally and keep this tab open.';
+    monitorMobileAudio();
+  }
+  $('micBtn').addEventListener('click', async () => {
+    if (micSessionActive) { await stopMobileSession(); return; }
+    micSessionActive = true; candidateContext = []; recentQuestion = ''; lastSuggestion = ''; turnQueue = Promise.resolve();
+    $('question').value = ''; $('transcriptCorrection').hidden = true; $('answerContent').hidden = true; $('answerEmpty').hidden = false;
+    $('micStatus').textContent = 'Starting mobile microphone…';
+    try { await startMobileSession(); }
+    catch (error) {
+      await stopMobileSession();
+      $('micStatus').textContent = error.name === 'NotAllowedError' ? 'Microphone access was denied. Allow microphone access in your browser settings and try again.' : error.message || 'Could not start mobile audio capture. Check microphone permission and try again.';
+    }
+  });
+} else if (!SpeechRecognition) { $('micBtn').disabled = true; $('micStatus').textContent = 'Speech input is unavailable here. Type your question instead.'; }
 else {
   let restartTimer = null;
   let rolloverTimer = null;
