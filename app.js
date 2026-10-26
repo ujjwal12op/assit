@@ -202,8 +202,10 @@ if (mobileRecorderAvailable) {
     const response = await apiFetch('/api/transcribe-turn', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ audioData, audioMimeType: (blob.type || mobileMimeType).split(';')[0], role: $('role').value, profile: $('profile').value, resumeContext: $('resumeContext').value, jobDescription: $('jobDescription').value }) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Could not transcribe this audio.');
-    if (result.transcript?.trim()) enqueueSessionTurn(result.transcript.trim());
-    if (micSessionActive) $('micStatus').textContent = 'Listening continuously. Keep this tab open while interviewing.';
+    const transcript = typeof result.transcript === 'string' ? result.transcript.trim() : '';
+    if (!transcript) { $('micStatus').textContent = 'Audio captured, but no clear words were recognized. Keep speaking normally; I am still listening.'; return; }
+    enqueueSessionTurn(transcript);
+    if (micSessionActive) $('micStatus').textContent = 'Speech recognized. Checking whether it was a question or an answer…';
   }
   function startMobileRecording() {
     if (!micSessionActive || !mobileStream || mobileRecorder?.state === 'recording') return;
