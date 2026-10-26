@@ -150,15 +150,81 @@ function isLikelyMobileQuestion(value) {
   const text = value.trim().replace(/\s+/g, ' ');
   return text.includes('?') || /^(?:what|why|how|when|where|who|which)\s+(?:is|are|was|were|do|does|did|can|could|would|should|will|have|has|had)\b/i.test(text) || /^(?:can|could|would|should|will|do|does|did|is|are|have|has)\b/i.test(text) || /^(?:tell me about|walk me through|explain|describe|compare|write|implement|solve|give me an example of)\b/i.test(text);
 }
+function partialJsonStringValue(source, key) {
+  const marker = '"' + key + '"';
+  const keyStart = source.indexOf(marker);
+  if (keyStart < 0) return '';
+  const colon = source.indexOf(':', keyStart + marker.length);
+  if (colon < 0) return '';
+  const quote = source.indexOf('"', colon + 1);
+  if (quote < 0) return '';
+  let raw = '';
+  let escaped = false;
+  for (let i = quote + 1; i < source.length; i++) {
+    const char = source[i];
+    if (escaped) { raw += char; escaped = false; }
+    else if (char === '\\') { raw += char; escaped = true; }
+    else if (char === '"') break;
+    else raw += char;
+  }
+  if (escaped) return '';
+  try { return JSON.parse('"' + raw + '"'); } catch { return ''; }
+}
+async function readSessionTurnStream(response) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let generated = '';
+  let result = null;
+  const processFrame = (frame) => {
+    let eventName = 'message';
+    const dataLines = [];
+    for (const line of frame.split(/\r?\n/)) {
+      if (line.startsWith('event:')) eventName = line.slice(6).trim();
+      else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+    }
+    if (!dataLines.length) return;
+    const payload = JSON.parse(dataLines.join('\n'));
+    if (eventName === 'error') throw new Error(payload.error || 'The answer stream failed.');
+    if (eventName === 'complete') { result = payload.result; return; }
+    if (eventName === 'delta' && typeof payload.text === 'string') {
+      generated += payload.text;
+      const partialClassification = partialJsonStringValue(generated, 'classification');
+      const partialAnswer = partialClassification === 'interviewer_question'
+        ? partialJsonStringValue(generated, 'answer')
+        : '';
+      if (partialAnswer) {
+        $('answerText').textContent = partialAnswer;
+        $('answerContent').hidden = false;
+        $('answerEmpty').hidden = true;
+        $('micStatus').textContent = 'Answer arriving…';
+      }
+    }
+  };
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split(/\r?\n\r?\n/);
+    buffer = frames.pop() || '';
+    for (const frame of frames) processFrame(frame);
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) processFrame(buffer);
+  if (!result) throw new Error('The answer stream ended before the answer was complete.');
+  return result;
+}
 async function classifySessionTurn(utterance, source = 'browser') {
   if (!micSessionActive) return;
   $('micStatus').textContent = 'Checking whether that was a question or an answer…';
   try {
     const response = await apiFetch('/api/session-turn', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
+      method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
       body: JSON.stringify({ utterance, role: $('role').value, company: $('company').value, profile: $('profile').value, resumeContext: $('resumeContext').value, jobDescription: $('jobDescription').value, mode: $('mode').value, style: $('style').value, candidateContext, recentQuestion, lastSuggestion })
     });
-    const data = await response.json();
+    const data = response.headers.get('content-type')?.includes('text/event-stream')
+      ? await readSessionTurnStream(response)
+      : await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not classify the spoken turn.');
     if (!micSessionActive) return;
     const mobileText = data.correctedUtterance || data.question || utterance;
