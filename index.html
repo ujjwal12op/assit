@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f6f7f4"><title>Interview Copilot</title><link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <section id="loginScreen" class="login-screen" hidden>
+    <div class="login-card"><div class="brand-icon">✳</div><h1>Interview Copilot</h1><p>This private app needs an access password.</p><form id="loginForm"><label for="accessPassword">ACCESS PASSWORD</label><input id="accessPassword" type="password" autocomplete="current-password" required><button class="primary" type="submit">Sign in</button><div id="loginStatus" class="login-status" role="status" aria-live="polite"></div></form></div>
+  </section>
+  <div id="appShell" class="shell" hidden>
+    <aside class="sidebar">
+      <a class="brand" href="#" aria-label="Interview Copilot home"><span class="brand-icon">✳</span><span>interview<span class="brand-light">copilot</span></span></a>
+      <div class="nav-label">WORKSPACE</div><button class="nav-item active"><span>▦</span> Interview room</button>
+      <button class="nav-item" id="profileNav"><span>◎</span> Candidate profile</button>
+      <div class="side-bottom"><div class="privacy-chip"><span class="dot"></span><div><strong>Local workspace</strong><small>No session history saved</small></div></div><div class="side-note">Speech recognition may be processed by your browser provider. Use AI assistance only when your interview rules allow it.</div></div>
+    </aside>
+    <main>
+      <header class="topbar"><div class="crumb">Workspace <span>/</span> Interview room</div><div class="topbar-actions"><div class="local-badge"><span class="dot"></span> Interview Copilot</div><button id="logoutBtn" class="text-button" hidden>Sign out</button></div></header>
+      <section class="welcome"><div><div class="eyebrow">YOUR INTERVIEW WORKSPACE</div><h1>Show up as your<br><em>most prepared self.</em></h1><p>Shape your context, ask a question, and get a clear answer grounded in your experience.</p></div><div class="welcome-mark">✳</div></section>
+      <section class="setup card"><div class="section-head"><div><span class="step">01</span><h2>Set your context</h2></div><span class="muted">Saved only in this browser</span></div>
+        <div class="fields"><label>ROLE YOU'RE INTERVIEWING FOR<input id="role" placeholder="e.g. Product Designer"></label><label>COMPANY <span class="optional">OPTIONAL</span><input id="company" placeholder="e.g. Acme"></label></div>
+        <label class="profile-label">YOUR EXPERIENCE <span class="optional">USED TO PERSONALIZE SUGGESTIONS</span><textarea id="profile" rows="4" placeholder="Add a few skills, projects, or examples you can speak to. Avoid sensitive personal data."></textarea></label>
+        <div class="document-fields">
+          <label>RESUME <span class="optional">OPTIONAL · PDF, TXT OR MD</span><input id="resumeFile" type="file" accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"><span id="resumeStatus" class="file-status">Upload to extract an editable profile summary.</span></label>
+          <label>JOB DESCRIPTION <span class="optional">OPTIONAL · PDF, TXT OR MD</span><input id="jobFile" type="file" accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"><span id="jobStatus" class="file-status">Or paste the job description below.</span></label>
+        </div>
+        <label class="profile-label">EXTRACTED RESUME CONTEXT <span class="optional">EDITABLE · ONLY HELD IN THIS TAB</span><textarea id="resumeContext" rows="3" placeholder="Upload a resume or add relevant experience here."></textarea></label>
+        <label class="profile-label">JOB DESCRIPTION <span class="optional">EDITABLE · ONLY HELD IN THIS TAB</span><textarea id="jobDescription" rows="3" placeholder="Paste the role description, responsibilities, and requirements here."></textarea></label>
+        <p class="document-note">Selected resume PDFs and job-description PDFs are sent to Gemini for text extraction. Extracted resume and job-description text is sent to Gemini with answer requests and is not saved by this app.</p>
+        <div class="fields lower-fields"><label>SESSION MODE<select id="mode"><option>Practice</option><option>Preparation</option><option>Mock interview</option><option>Live assistance (only if permitted)</option></select></label><label>ANSWER STYLE<select id="style"><option value="Auto detect" selected>Auto detect (recommended)</option><option>Concise</option><option>Behavioral · STAR</option><option>Technical explanation</option><option>Project-based</option><option>Scenario-based</option><option>HR / situational</option></select></label></div>
+      </section>
+      <section class="workspace-grid">
+        <div class="card question-card"><div class="section-head"><div><span class="step">02</span><h2>The question</h2></div><button class="text-button" id="clearBtn">Clear</button></div>
+          <label class="sr-only" for="question">Interview question</label><textarea id="question" class="question-input" rows="5" placeholder="Type or dictate an interview question…"></textarea><div id="transcriptCorrection" class="transcript-correction" hidden></div>
+          <div class="input-footer"><button id="micBtn" class="mic-button" aria-pressed="false"><span>●</span> Start session</button><span id="micStatus" class="muted">Starts continuous listening. Stop the session when finished.</span></div>
+          <div class="action-row"><span class="shortcut"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> to generate</span><button id="generateBtn" class="primary">Generate suggestion <span>↗</span></button></div>
+        </div>
+        <div class="card answer-card"><div class="section-head"><div><span class="step">03</span><h2>Answer notes</h2></div><span class="ai-label"><span>✳</span> COPILOT</span></div>
+          <div id="answerEmpty" class="answer-empty"><div class="empty-icon">✳</div><strong>Your answer will appear here</strong><p>Suggestions are a starting point. Keep what sounds like you.</p></div>
+          <div id="answerContent" class="answer-content" hidden><div id="answerText" class="answer-text"></div><div id="codeBlocks" class="code-blocks"></div><div id="missingContext" class="context-note" hidden></div><div id="evidence" class="evidence"></div><div class="answer-meta"><span><span id="detectedStyle"></span> <span id="latency"></span></span><button id="copyBtn" class="text-button">Copy answer</button></div></div>
+          <div id="loading" class="loading" hidden><span class="spinner"></span><div><strong>Finding the right shape…</strong><small>Grounding suggestions in your context</small></div></div>
+          <div class="answer-foot">AI can make mistakes. Verify details before using a suggestion.</div>
+        </div>
+      </section>
+      <footer>Interview Copilot <span>·</span> A thoughtful practice companion</footer>
+    </main>
+  </div>
+  <div id="toast" role="status" aria-live="polite" class="toast" hidden></div>
+  <script src="/app.js" defer></script>
+</body></html>

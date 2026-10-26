@@ -1,0 +1,8 @@
+{
+  "name": "interview-copilot-starter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local single-user MVP slice for Interview Copilot",
+  "scripts": { "start": "node --env-file-if-exists=.env server.mjs" },
+  "engines": { "node": ">=20.12" }
+}
