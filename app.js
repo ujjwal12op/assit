@@ -274,7 +274,7 @@ async function generate({ live = false, includeSessionHistory = false } = {}) {
     const response = await apiFetch('/api/answer', {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(live ? { accept: 'text/event-stream' } : {}) },
-      body: JSON.stringify({ question, role: $('role').value, company: $('company').value, profile: $('profile').value, resumeContext: $('resumeContext').value, jobDescription: $('jobDescription').value, mode: $('mode').value, style: $('style').value, ...(live ? { liveSession: true, candidateContext, recentQuestion, sessionHistory: includeSessionHistory ? liveAnswerHistory.slice(-4) : [] } : {}) })
+      body: JSON.stringify({ question, role: $('role').value, company: $('company').value, profile: $('profile').value, resumeContext: $('resumeContext').value, jobDescription: $('jobDescription').value, mode: $('mode').value, style: $('style').value, ...(live ? { liveSession: true, candidateContext, recentQuestion, lastSuggestion, sessionHistory: includeSessionHistory ? liveAnswerHistory.slice(-4) : [] } : {}) })
     });
     const data = live && response.headers.get('content-type')?.includes('text/event-stream')
       ? await readSessionTurnStream(response, true)
@@ -427,9 +427,11 @@ async function classifySessionTurn(utterance, source = 'browser') {
   const isFirstInterviewerTurn = !recentQuestion && !lastSuggestion && !hasClearCandidateLead;
   const isQuestion = isLikelyInterviewQuestion(utterance) || isFollowUp || isFirstInterviewerTurn;
   if (isQuestion) {
-    if (!isFollowUp) liveAnswerHistory = [];
+    if (!isFollowUp) {
+      liveAnswerHistory = [];
+      recentQuestion = utterance;
+    }
     addTranscriptLine('interviewer', utterance);
-    recentQuestion = utterance;
     $('question').value = utterance;
     $('transcriptCorrection').hidden = true;
     $('micStatus').textContent = 'Question detected instantly; generating answer…';
