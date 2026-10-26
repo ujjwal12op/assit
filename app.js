@@ -156,7 +156,7 @@ async function generate({ live = false } = {}) {
     const response = await apiFetch('/api/answer', {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...(live ? { accept: 'text/event-stream' } : {}) },
-      body: JSON.stringify({ question, role: $('role').value, company: $('company').value, profile: $('profile').value, resumeContext: $('resumeContext').value, jobDescription: $('jobDescription').value, mode: $('mode').value, style: $('style').value, ...(live ? { liveSession: true, candidateContext, recentQuestion } : {}) })
+      body: JSON.stringify({ question, role: $('role').value, company: $('company').value, profile: $('profile').value, resumeContext: $('resumeContext').value, jobDescription: $('jobDescription').value, mode: $('mode').value, style: $('style').value, ...(live ? { liveSession: true, candidateContext, recentQuestion, lastSuggestion } : {}) })
     });
     const data = live && response.headers.get('content-type')?.includes('text/event-stream')
       ? await readSessionTurnStream(response, true)
@@ -188,6 +188,20 @@ function isLikelyInterviewQuestion(value) {
   return /^(?:what|why|how|when|where|who|which)\b/i.test(text)
     || /^(?:can|could|would|should|will|do|does|did|is|are|have|has)\b/i.test(text)
     || /^(?:tell\s*(?:me|us)|let\s+me\s+know|walk\s*(?:me|us)(?:\s+through)?|talk\s*(?:me|us)(?:\s+through)?|let'?s\s+(?:talk|discuss|explore)|explain|describe|compare|write|implement|solve|calculate|outline|show\s+(?:me|us)|give\s+(?:me|us)\s+an\s+example|please\s+(?:explain|describe|compare|write|implement|solve)|i\s+was\s+wondering|i(?:'d|\s+would)\s+(?:like|love)\s+(?:you\s+to|to\s+(?:ask|hear|know|understand))|i\s+want\s+(?:you\s+to|to\s+ask)|i(?:'m|\s+am)\s+(?:curious|interested\s+in)|design\s+(?:a|an|the)|build\s+(?:a|an|the)|create\s+(?:a|an|the)|given\s+(?:a|an|the)|find\s+(?:a|an|the|all|the\s+first|the\s+last)|return\s+(?:a|an|the|the\s+value|the\s+result|the\s+answer)|you(?:'re|\s+are)\s+given|suppose|imagine|assume|consider|let'?s\s+say|what\s+about|how\s+about|your\s+(?:thoughts|experience|approach)\s+(?:on|to|with))\b/i.test(text);
+}
+function isContextualFollowUp(value) {
+  if (!lastSuggestion) return false;
+  const text = value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const hasFollowUpCue = /\b(?:how|why|what|where|when|who|which|explain|clarify|elaborate|expand|mean)\b/i.test(text);
+  if (!hasFollowUpCue) return false;
+  if (/\b(?:you said|you mentioned|you stated|you just said|when you said|when you mentioned|your answer|your explanation|earlier you|same thing|same point|that point|that part|what do you mean|how so|why so|can you explain|could you explain|expand on|elaborate on|clarify that)\b/i.test(text)) return true;
+  const hasReference = /\b(?:that|this|it|those|these|earlier|above|same)\b/i.test(text);
+  if (!hasReference) return false;
+  const priorWords = new Set(lastSuggestion.toLowerCase().match(/[a-z0-9]{4,}/g) || []);
+  const spokenWords = new Set(text.match(/[a-z0-9]{4,}/g) || []);
+  let overlap = 0;
+  for (const word of spokenWords) if (priorWords.has(word)) overlap++;
+  return overlap >= 1;
 }
 function partialJsonStringValue(source, key) {
   const marker = '"' + key + '"';
@@ -264,8 +278,8 @@ async function classifySessionTurn(utterance, source = 'browser') {
   if (!micSessionActive) return;
   const speechTurnId = ++activeSpeechTurnId;
   const localReadback = soundsLikeSuggestionReadback(utterance);
-  const isQuestion = isLikelyInterviewQuestion(utterance);
-  if (localReadback) {
+  const isQuestion = isLikelyInterviewQuestion(utterance) || isContextualFollowUp(utterance);
+  if (localReadback && !isQuestion) {
     recordCandidateSpeech(utterance, true);
     return;
   }
