@@ -148,21 +148,52 @@ function soundsLikeFirstPersonAnswer(utterance) {
   return /\b(?:i|me|my|mine|myself|we|us|our|ours|ourselves)\b/i.test(utterance);
 }
 function interviewDomainContext() {
-  return [ $('role').value, $('profile').value, $('resumeContext').value, $('jobDescription').value ].join(' ').toLowerCase();
+  return [ $('role').value, $('profile').value, $('resumeContext').value, $('jobDescription').value ].join(' ');
 }
 function correctDomainSpeechTerms(utterance) {
   const context = interviewDomainContext();
   const isDataEngineering = /\bdata\s*(?:engineer|engineering)|\b(?:pyspark|apache spark|spark sql|airflow|databricks|data pipeline|etl|elt|hadoop|kafka|snowflake|data warehouse)\b/i.test(context);
-  if (!isDataEngineering) return utterance;
-  let corrected = utterance
-    .replace(/\b(?:pie|pies|pi|py)\s*[- ]\s*(?:s)?park\b/gi, 'PySpark')
-    .replace(/\bpys\s*park\b/gi, 'PySpark')
-    .replace(/\bair\s+flow\b/gi, 'Airflow')
-    .replace(/\bdata\s+bricks\b/gi, 'Databricks');
-  if (/\b(?:what|why|how|when|where|who|which|explain|define|meaning|mean|workflow|pipeline|airflow|spark|dependency|dependencies|graph|task)\b/i.test(corrected) || /^\s*(?:(?:a|the)\s+)?tag\s*[?.!]*\s*$/i.test(corrected)) {
+  const domainTerms = new Set();
+  if (isDataEngineering) {
+    ['PySpark', 'Spark', 'Spark SQL', 'DAG', 'ETL', 'ELT', 'Airflow', 'Databricks', 'Hadoop', 'Kafka', 'Snowflake', 'Redshift', 'BigQuery', 'dbt', 'HDFS', 'Hive', 'Flink', 'Delta Lake', 'Parquet', 'DataFrame', 'Kinesis', 'Glue', 'EMR', 'CDC', 'SCD', 'OLAP', 'OLTP'].forEach((term) => domainTerms.add(term));
+  }
+  // Reuse acronyms and mixed-case technical names actually present in the
+  // candidate's role, profile, resume, and job description.
+  for (const term of context.match(/\b(?:[A-Z]{2,8}|[A-Z][a-z]+[A-Z][A-Za-z0-9]*)\b/g) || []) domainTerms.add(term);
+  let corrected = utterance;
+  if (domainTerms.has('PySpark') || isDataEngineering) {
+    corrected = corrected
+      .replace(/\b(?:pie|pies|pi|py)\s*[- ]\s*(?:s)?park\b/gi, 'PySpark')
+      .replace(/\bpys\s*park\b/gi, 'PySpark')
+      .replace(/\bspicepark\b/gi, 'PySpark')
+      .replace(/\bspice\s+(?:park|spark)\b/gi, 'PySpark')
+      .replace(/\bp\s*y\s*spark\b/gi, 'PySpark')
+      .replace(/\bair\s+flow\b/gi, 'Airflow')
+      .replace(/\bdata\s+bricks\b/gi, 'Databricks')
+      .replace(/\batl\b/gi, 'ETL')
+      .replace(/\bent\b/gi, 'ELT');
+  }
+  if (domainTerms.has('DAG') && (/\b(?:what|why|how|when|where|who|which|explain|define|meaning|mean|workflow|pipeline|airflow|spark|dependency|dependencies|graph|task)\b/i.test(corrected) || /^\s*(?:(?:a|the)\s+)?tag\s*[?.!]*\s*$/i.test(corrected))) {
     corrected = corrected.replace(/\btag\b/gi, 'DAG');
   }
-  return corrected;
+  const acronyms = [...domainTerms].filter((term) => /^[A-Z0-9]{2,8}$/.test(term));
+  const isOneEditApart = (heard, expected) => {
+    if (Math.abs(heard.length - expected.length) > 1 || heard === expected) return false;
+    let left = 0, right = 0, edits = 0;
+    while (left < heard.length && right < expected.length) {
+      if (heard[left] === expected[right]) { left++; right++; continue; }
+      if (++edits > 1) return false;
+      if (heard.length > expected.length) left++;
+      else if (expected.length > heard.length) right++;
+      else { left++; right++; }
+    }
+    return edits + (left < heard.length || right < expected.length ? 1 : 0) === 1;
+  };
+  return corrected.replace(/\b[A-Za-z0-9]{2,8}\b/g, (heard) => {
+    if (!/^[A-Z0-9]{2,8}$/.test(heard) || /^(?:A|AN|AND|ARE|CAN|FOR|HAS|HOW|NOT|THE|THIS|YOU)$/i.test(heard)) return heard;
+    const candidates = acronyms.filter((expected) => isOneEditApart(heard.toUpperCase(), expected));
+    return candidates.length === 1 ? candidates[0] : heard;
+  });
 }
 function addTranscriptLine(role, utterance) {
   const transcript = role === 'interviewer' ? interviewerTranscript : candidateTranscript;
