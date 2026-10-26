@@ -8,7 +8,8 @@ let micSessionActive = false;
 let lastSuggestion = '';
 let recentQuestion = '';
 let candidateContext = [];
-let turnQueue = Promise.resolve();
+let liveGenerationId = 0;
+let activeSpeechTurnId = 0;
 function showToast(message) {
   const toast = $('toast'); toast.textContent = message; toast.hidden = false;
   clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.hidden = true, 4000);
@@ -145,22 +146,42 @@ try {
 fields.forEach((id) => $(id).addEventListener('input', saveContext));
 ['mode', 'style'].forEach((id) => $(id).addEventListener('change', saveContext));
 
-async function generate() {
+async function generate({ live = false } = {}) {
   const question = $('question').value.trim();
   if (!question) { $('question').focus(); showToast('Add a question first.'); return; }
+  const requestId = live ? ++liveGenerationId : 0;
   $('transcriptCorrection').hidden = true;
   saveContext(); $('answerEmpty').hidden = true; $('answerContent').hidden = true; $('loading').hidden = false; $('generateBtn').disabled = true;
   try {
-    const response = await apiFetch('/api/answer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ question, role: $('role').value, company: $('company').value, profile: $('profile').value, resumeContext: $('resumeContext').value, jobDescription: $('jobDescription').value, mode: $('mode').value, style: $('style').value }) });
-    const data = await response.json();
+    const response = await apiFetch('/api/answer', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(live ? { accept: 'text/event-stream' } : {}) },
+      body: JSON.stringify({ question, role: $('role').value, company: $('company').value, profile: $('profile').value, resumeContext: $('resumeContext').value, jobDescription: $('jobDescription').value, mode: $('mode').value, style: $('style').value, ...(live ? { liveSession: true, candidateContext, recentQuestion } : {}) })
+    });
+    const data = live && response.headers.get('content-type')?.includes('text/event-stream')
+      ? await readSessionTurnStream(response, true)
+      : await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not generate a suggestion.');
+    if (live && requestId !== liveGenerationId) return true;
+    if (live && typeof data.correctedQuestion === 'string' && data.correctedQuestion.trim() && data.correctedQuestion.trim().toLowerCase() !== question.toLowerCase()) {
+      const correctedQuestion = data.correctedQuestion.trim();
+      if ($('question').value.trim() === question) $('question').value = correctedQuestion;
+      $('transcriptCorrection').textContent = `Possible speech correction: “${question}” → “${correctedQuestion}”.`;
+      $('transcriptCorrection').hidden = false;
+    }
     displayAnswer(data); lastSuggestion = data.answer || '';
-  } catch (error) { $('answerEmpty').hidden = false; showToast(error.message || 'Network error. Please retry.'); }
-  finally { $('loading').hidden = true; $('generateBtn').disabled = false; }
+    return true;
+  } catch (error) {
+    if (!live || requestId === liveGenerationId) { $('answerEmpty').hidden = false; showToast(error.message || 'Network error. Please retry.'); }
+  }
+  finally {
+    if (!live || requestId === liveGenerationId) { $('loading').hidden = true; $('generateBtn').disabled = false; }
+  }
+  return false;
 }
-function isLikelyMobileQuestion(value) {
-  const text = value.trim().replace(/\s+/g, ' ');
-  return text.includes('?') || /^(?:what|why|how|when|where|who|which)\s+(?:is|are|was|were|do|does|did|can|could|would|should|will|have|has|had)\b/i.test(text) || /^(?:can|could|would|should|will|do|does|did|is|are|have|has)\b/i.test(text) || /^(?:tell me about|walk me through|explain|describe|compare|write|implement|solve|give me an example of)\b/i.test(text);
+function isLikelyInterviewQuestion(value) {
+  const text = value.trim().replace(/\s+/g, ' ').replace(/^(?:(?:um|uh|hmm|so|okay|well|and|right|next)[, ]+)+/i, '');
+  return text.includes('?') || /^(?:what|why|how|when|where|who|which)(?:['’]s|\s+(?:is|are|was|were|do|does|did|can|could|would|should|will|have|has|had))\b/i.test(text) || /^(?:can|could|would|should|will|do|does|did|is|are|have|has)\b/i.test(text) || /^(?:tell me (?:about|why|how|what|when|where)|walk me through|explain|describe|compare|write|implement|solve|outline|show me|give me an example of|please (?:explain|describe|compare|write|implement|solve)|i was wondering|i(?:'d| would) (?:like|love) (?:you to|to hear)|i want you to)\b/i.test(text);
 }
 function partialJsonStringValue(source, key) {
   const marker = '"' + key + '"';
@@ -182,7 +203,7 @@ function partialJsonStringValue(source, key) {
   if (escaped) return '';
   try { return JSON.parse('"' + raw + '"'); } catch { return ''; }
 }
-async function readSessionTurnStream(response) {
+async function readSessionTurnStream(response, liveAnswer = false) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -202,12 +223,14 @@ async function readSessionTurnStream(response) {
     if (eventName === 'delta' && typeof payload.text === 'string') {
       generated += payload.text;
       const partialClassification = partialJsonStringValue(generated, 'classification');
-      if (partialClassification === 'interviewer_question') {
+      if (!liveAnswer && partialClassification === 'interviewer_question') {
         $('micStatus').textContent = 'Question detected; drafting answer…';
-      } else if (partialClassification === 'candidate_answer') {
+      } else if (!liveAnswer && partialClassification === 'candidate_answer') {
         $('micStatus').textContent = 'Candidate response detected; no answer needed.';
       }
-      const partialAnswer = partialClassification === 'interviewer_question'
+      const partialAnswer = liveAnswer
+        ? partialJsonStringValue(generated, 'answer')
+        : partialClassification === 'interviewer_question'
         ? partialJsonStringValue(generated, 'answer')
         : '';
       if (partialAnswer) {
@@ -233,57 +256,34 @@ async function readSessionTurnStream(response) {
 }
 async function classifySessionTurn(utterance, source = 'browser') {
   if (!micSessionActive) return;
+  const speechTurnId = ++activeSpeechTurnId;
   const localReadback = soundsLikeSuggestionReadback(utterance);
-  if (localReadback || soundsLikeCandidateStatement(utterance)) {
-    recordCandidateSpeech(utterance, localReadback);
+  const isQuestion = isLikelyInterviewQuestion(utterance);
+  if (localReadback) {
+    recordCandidateSpeech(utterance, true);
     return;
   }
-  $('micStatus').textContent = 'Checking whether that was a question or an answer…';
-  try {
-    const response = await apiFetch('/api/session-turn', {
-      method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
-      body: JSON.stringify({ utterance, role: $('role').value, company: $('company').value, profile: $('profile').value, resumeContext: $('resumeContext').value, jobDescription: $('jobDescription').value, mode: $('mode').value, style: $('style').value, candidateContext, recentQuestion, lastSuggestion })
-    });
-    const data = response.headers.get('content-type')?.includes('text/event-stream')
-      ? await readSessionTurnStream(response)
-      : await response.json();
-    if (!response.ok) throw new Error(data.error || 'Could not classify the spoken turn.');
-    if (!micSessionActive) return;
-    const mobileText = data.correctedUtterance || data.question || utterance;
-    const mobileQuestionFallback = source === 'mobile' && data.classification !== 'interviewer_question' && isLikelyMobileQuestion(mobileText);
-    if (mobileQuestionFallback) {
-      recentQuestion = mobileText; $('question').value = mobileText;
-      $('micStatus').textContent = 'Mobile question recognized; generating its answer…';
-      await generate();
-      if (micSessionActive) $('micStatus').textContent = 'Mobile question answer ready.';
-    } else if (data.classification === 'interviewer_question' && data.answer) {
-      recentQuestion = data.correctedUtterance || data.question || utterance; $('question').value = recentQuestion;
-      const corrections = Array.isArray(data.transcriptionCorrections) ? data.transcriptionCorrections : [];
-      const correctionNote = $('transcriptCorrection');
-      if (corrections.length) {
-        correctionNote.textContent = `Possible speech correction: ${corrections.map((item) => `“${item.heard}” → “${item.corrected}”`).join('; ')}. Check the question wording.`;
-        correctionNote.hidden = false;
-      } else correctionNote.hidden = true;
-      displayAnswer(data); lastSuggestion = data.answer;
-      $('micStatus').textContent = `Interviewer question detected · ${(Number(data.latencyMs || 0) / 1000).toFixed(1)}s`;
-    } else if (data.classification === 'candidate_answer') {
-      if ($('question').value === utterance) $('question').value = '';
-      const readback = data.isReadingSuggestion === true || soundsLikeSuggestionReadback(utterance);
-      if (!readback) candidateContext = [...candidateContext, data.correctedUtterance || utterance].slice(-8);
-      $('micStatus').textContent = readback ? 'Your spoken response was recognized; no new question generated.' : 'Your response was recognized; waiting for the next interviewer question.';
-    } else {
-      if (source === 'mobile') $('question').value = mobileText;
-      $('micStatus').textContent = source === 'mobile'
-        ? 'Speech recognized but unclear: "' + mobileText.slice(0, 140) + '". It is in the question box if you want to generate it manually.'
-        : 'Speech heard, but I could not confidently tell whether it was a question. No answer generated.';
-    }
-  } catch (error) { if (micSessionActive) $('micStatus').textContent = error.message || 'Could not process speech. Still listening.'; }
+  if (isQuestion) {
+    recentQuestion = utterance;
+    $('question').value = utterance;
+    $('transcriptCorrection').hidden = true;
+    $('micStatus').textContent = 'Question detected instantly; generating answer…';
+    const generated = await generate({ live: true });
+    if (micSessionActive && speechTurnId === activeSpeechTurnId) $('micStatus').textContent = generated ? 'Answer ready. Listening for the next turn.' : 'Question detected; answer could not be generated. Still listening.';
+    return;
+  }
+  if (soundsLikeCandidateStatement(utterance) || recentQuestion) {
+    recordCandidateSpeech(utterance);
+    return;
+  }
+  $('question').value = utterance;
+  $('micStatus').textContent = 'Speech heard; it is not clearly a question. Edit it or generate manually.';
 }
 initializeAccess();
 function enqueueSessionTurn(utterance, source = 'browser') {
   const clean = utterance.trim();
   if (!clean || clean.length < 3) return;
-  turnQueue = turnQueue.then(() => classifySessionTurn(clean, source)).catch(() => {});
+  classifySessionTurn(clean, source).catch(() => {});
 }
 $('generateBtn').addEventListener('click', generate);
 document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); generate(); } });
