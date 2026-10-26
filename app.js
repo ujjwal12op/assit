@@ -145,7 +145,14 @@ function soundsLikeCandidateStatement(utterance) {
   return /^(?:i\s+(?:built|used|worked|led|created|designed|implemented|managed|helped|learned|think|believe|prefer|started|focused|handled|owned|contributed|developed)\b|we\s+(?:built|used|worked|led|created|designed|implemented|managed|helped|started|focused|handled|owned|contributed|developed)\b|my\s+(?:background|experience|approach|role|project)\b|in\s+my\s+(?:last|previous|current|project|experience)\b)/i.test(text);
 }
 function soundsLikeFirstPersonAnswer(utterance) {
-  return /\b(?:i|me|my|mine|myself|we|us|our|ours|ourselves)\b/i.test(utterance);
+  const text = utterance.trim();
+  // "Tell me…", "show me…", and "can you…" are common interviewer
+  // prompts. The object pronoun "me" must not make those sound like candidate
+  // answers. Look for first-person subjects and possessives instead.
+  if (/^(?:(?:can|could|would|will|should|do|does|did|have|has)\s+you\b|(?:tell|show|give|walk|talk)\s+(?:me|us)\b)/i.test(text)) return false;
+  return /^(?:i|we|my|mine|myself|our|ours|ourselves)\b/i.test(text)
+    || /^(?:(?:well|yeah|yes|okay|alright|so|and|but|because)[,\s]+)+(?:i|we|my|our)\b/i.test(text)
+    || /(?:[.!?]\s+|\b(?:and|but|because|so)\s+)(?:i|we)\s+(?:am|was|were|have|had|will|would|can|could|did|do|used|use|built|worked|led|created|designed|implemented|managed|helped|learned|think|believe|prefer|started|focused|handled|owned|contributed|developed)\b/i.test(text);
 }
 function interviewDomainContext() {
   return [ $('role').value, $('profile').value, $('resumeContext').value, $('jobDescription').value ].join(' ');
