@@ -1,4 +1,5 @@
 const $ = (id) => document.getElementById(id);
+const speechBuffer = window.SpeechBuffer;
 const fields = ['role', 'company', 'profile', 'mode', 'style'];
 let recognition = null;
 let finalTranscript = '';
@@ -450,20 +451,8 @@ function enqueueSessionTurn(utterance, source = 'browser') {
   // Keep accidental duplicate finals out, but let a user repeat a missed question
   // without the retry being swallowed by the duplicate guard.
   if (normalized === lastSubmittedSpeech && Date.now() - lastSubmittedSpeechAt < 900) return;
-  if (pendingSessionUtterance) {
-    const previous = pendingSessionUtterance.trim();
-    const previousNorm = previous.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-    const nextNorm = normalized;
-    if (previousNorm === nextNorm || previousNorm.startsWith(nextNorm + ' ')) return;
-    if (nextNorm.startsWith(previousNorm + ' ')) pendingSessionUtterance = clean;
-    else {
-      const previousWords = previous.split(/\s+/);
-      const nextWords = clean.split(/\s+/);
-      let overlap = Math.min(previousWords.length, nextWords.length);
-      while (overlap > 0 && previousWords.slice(-overlap).join(' ').toLowerCase() !== nextWords.slice(0, overlap).join(' ').toLowerCase()) overlap--;
-      pendingSessionUtterance = `${previous} ${nextWords.slice(overlap).join(' ')}`.trim();
-    }
-  } else pendingSessionUtterance = clean;
+  pendingSessionUtterance = speechBuffer.merge(pendingSessionUtterance, clean);
+  $('question').value = pendingSessionUtterance;
   clearTimeout(pendingSessionTurnTimer);
   pendingSessionTurnTimer = setTimeout(() => {
     pendingSessionTurnTimer = null;
@@ -480,7 +469,7 @@ function enqueueSessionTurn(utterance, source = 'browser') {
       $('transcriptCorrection').hidden = false;
     }
     classifySessionTurn(contextCorrectedUtterance, source).catch(() => {});
-  }, 350);
+  }, 1_000);
 }
 function resetSpeechTurnBuffer() {
   clearTimeout(pendingSessionTurnTimer);
@@ -532,7 +521,7 @@ if (mobileBrowser && SpeechRecognition) {
       instance.continuous = false;
       instance.interimResults = true;
       instance.maxAlternatives = 5;
-      instance.lang = navigator.language || 'en-US';
+      instance.lang = 'en-IN';
       instance.onstart = () => {
         if (instance !== mobileRecognizer || !micSessionActive) return;
         mobileRetryDelay = 400;
@@ -610,7 +599,7 @@ if (mobileBrowser && SpeechRecognition) {
   });
 } else if (mobileRecorderAvailable) {
   let mobileStream = null, mobileRecorder = null, mobileAudioContext = null, mobileAnalyser = null, mobileFrame = null, mobileWakeLock = null;
-  let mobileChunks = [], mobileSpeechAt = 0, mobileRecordingAt = 0, mobileMimeType = '';
+  let mobileChunks = [], mobileSpeechAt = 0, mobileRecordingAt = 0, mobileMimeType = '', mobileLastDiagnosticAt = 0;
   const mobileSamples = new Float32Array(512);
   async function transcribeMobileAudio(blob) {
     if (!micSessionActive || blob.size < 1200) return;
@@ -645,12 +634,30 @@ if (mobileBrowser && SpeechRecognition) {
   function monitorMobileAudio() {
     if (!micSessionActive || !mobileAnalyser) return;
     mobileAnalyser.getFloatTimeDomainData(mobileSamples);
-    let sum = 0; for (const sample of mobileSamples) sum += sample * sample;
+    let sum = 0, peak = 0, clipped = 0;
+    for (const sample of mobileSamples) {
+      sum += sample * sample;
+      peak = Math.max(peak, Math.abs(sample));
+      if (Math.abs(sample) >= 0.985) clipped++;
+    }
     const level = Math.sqrt(sum / mobileSamples.length), now = Date.now();
-    if (level > 0.012) { mobileSpeechAt = now; if (mobileRecorder?.state !== 'recording') startMobileRecording(); }
+    if (level > 0.006) { mobileSpeechAt = now; if (mobileRecorder?.state !== 'recording') startMobileRecording(); }
     if (mobileRecorder?.state === 'recording') {
       const duration = now - mobileRecordingAt;
-      if (duration > 14_000 || (mobileSpeechAt && now - mobileSpeechAt > 1_700 && duration > 1_600)) stopMobileRecording();
+      if (duration > 30_000 || (mobileSpeechAt && now - mobileSpeechAt > 2_400 && duration > 1_800)) stopMobileRecording();
+    }
+    if (now - mobileLastDiagnosticAt > 1_000 && $('micStatus').textContent !== 'Transcribing speech…') {
+      mobileLastDiagnosticAt = now;
+      const track = mobileStream?.getAudioTracks()[0];
+      const settings = track?.getSettings?.() || {};
+      const micName = track?.label || 'browser default microphone';
+      const format = [settings.sampleRate ? `${settings.sampleRate} Hz` : '', settings.channelCount ? `${settings.channelCount} channel` : ''].filter(Boolean).join(', ');
+      const processing = [
+        ['AEC', settings.echoCancellation],
+        ['noise suppression', settings.noiseSuppression],
+        ['AGC', settings.autoGainControl]
+      ].filter(([, enabled]) => enabled !== undefined).map(([name, enabled]) => `${name} ${enabled ? 'on' : 'off'}`).join(', ');
+      $('micStatus').textContent = `Mic ${micName}${format ? ` · ${format}` : ''}${processing ? ` · ${processing}` : ''} · RMS ${level.toFixed(3)} · peak ${peak.toFixed(3)} · clipped ${((clipped / mobileSamples.length) * 100).toFixed(1)}%`;
     }
     mobileFrame = requestAnimationFrame(monitorMobileAudio);
   }
@@ -667,7 +674,7 @@ if (mobileBrowser && SpeechRecognition) {
     mobileWakeLock = null;
   }
   async function startMobileSession() {
-    mobileStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    mobileStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: { ideal: 1 }, sampleRate: { ideal: 48_000 } } });
     mobileAudioContext = new AudioContext(); await mobileAudioContext.resume();
     mobileAnalyser = mobileAudioContext.createAnalyser(); mobileAnalyser.fftSize = 512;
     mobileAudioContext.createMediaStreamSource(mobileStream).connect(mobileAnalyser);
@@ -726,7 +733,7 @@ else {
     if (!micSessionActive) return;
     const instance = new SpeechRecognition();
     recognition = instance;
-    instance.continuous = true; instance.interimResults = true; instance.maxAlternatives = 5; instance.lang = navigator.language || 'en-US';
+    instance.continuous = true; instance.interimResults = true; instance.maxAlternatives = 5; instance.lang = 'en-IN';
     startupTimer = setTimeout(() => {
       if (instance !== recognition || !micSessionActive) return;
       $('micStatus').textContent = 'Speech service did not connect; retrying…';

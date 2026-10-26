@@ -137,11 +137,13 @@ const server = createServer(async (req, res) => {
       const dataEngineeringVocabulary = dataEngineeringContext
         ? ['PySpark', 'Apache Spark', 'Spark SQL', 'DAG', 'directed acyclic graph', 'Apache Airflow', 'Databricks', 'ETL', 'ELT', 'Hadoop', 'Kafka', 'Snowflake', 'data warehouse', 'data lake', 'Delta Lake', 'Parquet', 'Apache Hive', 'Apache Flink']
         : [];
-      const contextVocabulary = (context.match(/\b[A-Za-z][A-Za-z0-9+#./-]{2,}\b/g) || []).filter((term) => /[A-Z0-9+#./-]/.test(term) || term.length >= 6);
+      // Keep hints focused on acronyms and proper/technical names actually
+      // present in the candidate context. Vocabulary is a bias, never a mandate.
+      const contextVocabulary = context.match(/\b(?:[A-Z]{2,8}|[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)?|[A-Za-z]+[A-Z][A-Za-z0-9]*|[A-Za-z]+\d[A-Za-z0-9]*)\b/g) || [];
       const customVocabulary = [...new Set([...dataEngineeringVocabulary, ...contextVocabulary])].slice(0, 120);
       try {
         const model = process.env.GEMINI_TRANSCRIPTION_MODEL || 'gemini-3.5-transcribe';
-        const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', { method: 'POST', headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY, 'content-type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ inlineData: { mimeType: audioMimeType, data: audioData } }] }], generationConfig: { audioTranscriptionConfig: { mode: 'SMART', customVocabulary } } }), signal: AbortSignal.timeout(25_000) });
+        const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', { method: 'POST', headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY, 'content-type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ inlineData: { mimeType: audioMimeType, data: audioData } }] }], generationConfig: { audioTranscriptionConfig: { languageCodes: ['en-IN'], mode: 'VERBATIM', customVocabulary } } }), signal: AbortSignal.timeout(25_000) });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) return json(res, response.status === 429 ? 429 : 502, { error: payload.error?.message || 'Gemini could not transcribe this audio. The microphone is still listening.' });
         const transcript = (payload.candidates || []).flatMap((candidate) => candidate.content?.parts || []).map((part) => {
@@ -455,7 +457,7 @@ const server = createServer(async (req, res) => {
       }
       return json(res, 200, { ...result, codeBlocks: Array.isArray(result.codeBlocks) ? result.codeBlocks : [], latencyMs: Date.now() - started });
     }
-    const assets = { '/': ['index.html', 'text/html; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'] };
+    const assets = { '/': ['index.html', 'text/html; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/speech-buffer.js': ['speech-buffer.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'] };
     if (req.method === 'GET' && assets[url.pathname]) {
       const [file, type] = assets[url.pathname];
       res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
