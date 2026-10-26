@@ -181,7 +181,7 @@ async function generate({ live = false } = {}) {
 }
 function isLikelyInterviewQuestion(value) {
   const text = value.trim().replace(/\s+/g, ' ').replace(/^(?:(?:um|uh|hmm|so|okay|well|and|right|next)[, ]+)+/i, '');
-  return text.includes('?') || /^(?:what|why|how|when|where|who|which)(?:['’]s|\s+(?:is|are|was|were|do|does|did|can|could|would|should|will|have|has|had))\b/i.test(text) || /^(?:can|could|would|should|will|do|does|did|is|are|have|has)\b/i.test(text) || /^(?:tell me (?:about|why|how|what|when|where)|walk me through|explain|describe|compare|write|implement|solve|outline|show me|give me an example of|please (?:explain|describe|compare|write|implement|solve)|i was wondering|i(?:'d| would) (?:like|love) (?:you to|to hear)|i want you to)\b/i.test(text);
+  return text.includes('?') || /^(?:what|why|how|when|where|who|which)(?:['’]s|\s+(?:is|are|was|were|do|does|did|can|could|would|should|will|have|has|had))\b/i.test(text) || /^(?:can|could|would|should|will|do|does|did|is|are|have|has)\b/i.test(text) || /^(?:tell me (?:about|why|how|what|when|where)|walk me through|explain|describe|compare|write|implement|solve|outline|show me|give me an example of|please (?:explain|describe|compare|write|implement|solve)|i was wondering|i(?:'d| would) (?:like|love) (?:you to|to hear)|i want you to|design (?:a|an|the)|build (?:a|an|the)|create (?:a|an|the)|given (?:a|an|the)|find (?:a|an|the|all|the first|the last)|return (?:a|an|the|the value|the result|the answer))\b/i.test(text);
 }
 function partialJsonStringValue(source, key) {
   const marker = '"' + key + '"';
