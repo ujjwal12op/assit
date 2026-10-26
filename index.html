@@ -45,6 +45,10 @@
         <div class="card question-card"><div class="section-head"><div><span class="step">02</span><h2>The question</h2></div><button class="text-button" id="clearBtn">Clear</button></div>
           <label class="sr-only" for="question">Interview question</label><textarea id="question" class="question-input" rows="5" placeholder="Type or dictate an interview question…"></textarea><div id="transcriptCorrection" class="transcript-correction" hidden></div>
           <div class="input-footer"><button id="micBtn" class="mic-button" aria-pressed="false"><span>●</span> Start session</button><span id="micStatus" class="muted">Starts continuous listening. Stop the session when finished.</span></div>
+          <div class="speaker-transcripts" aria-live="polite" aria-label="Live speaker transcripts">
+            <div id="interviewerTranscriptPanel" class="speaker-transcript" hidden><strong>Interviewer</strong><p id="interviewerTranscript"></p></div>
+            <div id="candidateTranscriptPanel" class="speaker-transcript" hidden><strong>You</strong><p id="candidateTranscript"></p></div>
+          </div>
           <div class="action-row"><span class="shortcut"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> to generate</span><button id="generateBtn" class="primary">Generate suggestion <span>↗</span></button></div>
         </div>
       </section>

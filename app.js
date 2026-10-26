@@ -8,6 +8,8 @@ let micSessionActive = false;
 let lastSuggestion = '';
 let recentQuestion = '';
 let candidateContext = [];
+let interviewerTranscript = [];
+let candidateTranscript = [];
 let liveAnswerHistory = [];
 let liveGenerationId = 0;
 let activeSpeechTurnId = 0;
@@ -142,8 +144,30 @@ function soundsLikeCandidateStatement(utterance) {
   if (text.length < 12 || /\?\s*$/.test(text)) return false;
   return /^(?:i\s+(?:built|used|worked|led|created|designed|implemented|managed|helped|learned|think|believe|prefer|started|focused|handled|owned|contributed|developed)\b|we\s+(?:built|used|worked|led|created|designed|implemented|managed|helped|started|focused|handled|owned|contributed|developed)\b|my\s+(?:background|experience|approach|role|project)\b|in\s+my\s+(?:last|previous|current|project|experience)\b)/i.test(text);
 }
+function soundsLikeFirstPersonAnswer(utterance) {
+  return /\b(?:i|me|my|mine|myself|we|us|our|ours|ourselves)\b/i.test(utterance);
+}
+function addTranscriptLine(role, utterance) {
+  const transcript = role === 'interviewer' ? interviewerTranscript : candidateTranscript;
+  const clean = utterance.trim();
+  if (!clean || transcript.at(-1) === clean) return;
+  transcript.push(clean);
+  if (transcript.length > 6) transcript.shift();
+  const target = role === 'interviewer' ? 'interviewerTranscript' : 'candidateTranscript';
+  $(target).textContent = transcript.join('\n');
+  $(target).parentElement.hidden = false;
+}
+function resetSpeakerTranscripts() {
+  interviewerTranscript = [];
+  candidateTranscript = [];
+  $('interviewerTranscript').textContent = '';
+  $('candidateTranscript').textContent = '';
+  $('interviewerTranscriptPanel').hidden = true;
+  $('candidateTranscriptPanel').hidden = true;
+}
 function recordCandidateSpeech(utterance, readback = false) {
   candidateContext = [...candidateContext, utterance].slice(-8);
+  addTranscriptLine('candidate', utterance);
   if ($('question').value.trim() === utterance.trim()) $('question').value = '';
   $('micStatus').textContent = readback
     ? 'Your spoken response was recognized; no new question generated.'
@@ -205,6 +229,7 @@ function isLikelyInterviewQuestion(value) {
     || /^(?:can|could|would|should|will|do|does|did|is|are|have|has)\b/i.test(text)
     || /^(?:tell\s*(?:me|us)|let\s+me\s+know|walk\s*(?:me|us)(?:\s+through)?|talk\s*(?:me|us)(?:\s+through)?|let'?s\s+(?:talk|discuss|explore)|explain|describe|compare|difference\s+between|differentiate|write|implement|solve|calculate|outline|show\s+(?:me|us)|give\s+(?:me|us)\s+an\s+example|please\s+(?:explain|describe|compare|write|implement|solve)|i\s+was\s+wondering|i(?:'d|\s+would)\s+(?:like|love)\s+(?:you\s+to|to\s+(?:ask|hear|know|understand))|i\s+want\s+(?:you\s+to|to\s+ask)|i(?:'m|\s+am)\s+(?:curious|interested\s+in)|design\s+(?:a|an|the)|build\s+(?:a|an|the)|create\s+(?:a|an|the)|given\s+(?:a|an|the)|find\s+(?:a|an|the|all|the\s+first|the\s+last)|return\s+(?:a|an|the|the\s+value|the\s+result|the\s+answer)|you(?:'re|\s+are)\s+given|suppose|imagine|assume|consider|let'?s\s+say|what\s+about|how\s+about|your\s+(?:thoughts|experience|approach)\s+(?:on|to|with))\b/i.test(text)
     || /\b(?:can you|could you|would you|do you|does it|how would|what would|what happens|why does|how does|what is the difference|what's the difference|tell me why|explain how|explain why)\b/i.test(text)
+    || /\b(?:what|why|how|when|where|who|which)\s+(?:is|are|was|were|do|does|did|can|could|would|should|will|has|have|had|does|did)\b/i.test(text)
     || /^(?:and|so)\s+(?:the\s+)?(?:difference|approach|architecture|design|solution|query|code)\b/i.test(text);
 }
 function isContextualFollowUp(value) {
@@ -303,6 +328,13 @@ async function classifySessionTurn(utterance, source = 'browser') {
     recordCandidateSpeech(utterance, true);
     return;
   }
+  // In this single-microphone setup, speaker identity is inferred from the
+  // candidate's first-person language plus matching the answer being read aloud.
+  // Classify that before question wording so candidate speech cannot regenerate.
+  if (soundsLikeFirstPersonAnswer(utterance)) {
+    recordCandidateSpeech(utterance);
+    return;
+  }
   const hasClearCandidateLead = soundsLikeCandidateStatement(utterance);
   // The first meaningful turn in a session is normally the interviewer's opening
   // question. Browser ASR often drops its opening words or punctuation, so don't
@@ -311,6 +343,7 @@ async function classifySessionTurn(utterance, source = 'browser') {
   const isQuestion = isLikelyInterviewQuestion(utterance) || isFollowUp || isFirstInterviewerTurn;
   if (isQuestion) {
     if (!isFollowUp) liveAnswerHistory = [];
+    addTranscriptLine('interviewer', utterance);
     recentQuestion = utterance;
     $('question').value = utterance;
     $('transcriptCorrection').hidden = true;
@@ -319,12 +352,7 @@ async function classifySessionTurn(utterance, source = 'browser') {
     if (micSessionActive && speechTurnId === activeSpeechTurnId) $('micStatus').textContent = generated ? 'Answer ready. Listening for the next turn.' : 'Question detected; answer could not be generated. Still listening.';
     return;
   }
-  if (soundsLikeCandidateStatement(utterance) || recentQuestion) {
-    recordCandidateSpeech(utterance);
-    return;
-  }
-  $('question').value = utterance;
-  $('micStatus').textContent = 'Speech heard; it is not clearly a question. Edit it or generate manually.';
+  recordCandidateSpeech(utterance);
 }
 initializeAccess();
 function enqueueSessionTurn(utterance, source = 'browser') {
@@ -473,7 +501,7 @@ if (mobileBrowser && SpeechRecognition) {
   $('micBtn').addEventListener('click', () => {
     if (micSessionActive) { stopMobileRecognitionSession(); return; }
     micSessionActive = true;
-    resetSpeechTurnBuffer(); candidateContext = []; recentQuestion = ''; lastSuggestion = ''; liveAnswerHistory = []; turnQueue = Promise.resolve();
+    resetSpeechTurnBuffer(); resetSpeakerTranscripts(); candidateContext = []; recentQuestion = ''; lastSuggestion = ''; liveAnswerHistory = []; turnQueue = Promise.resolve();
     $('question').value = ''; $('transcriptCorrection').hidden = true; $('answerContent').hidden = true; $('answerEmpty').hidden = false;
     $('micStatus').textContent = 'Starting mobile speech recognition…';
     startMobileRecognition();
@@ -549,7 +577,7 @@ if (mobileBrowser && SpeechRecognition) {
   }
   $('micBtn').addEventListener('click', async () => {
     if (micSessionActive) { await stopMobileSession(); return; }
-    micSessionActive = true; resetSpeechTurnBuffer(); candidateContext = []; recentQuestion = ''; lastSuggestion = ''; liveAnswerHistory = []; turnQueue = Promise.resolve();
+    micSessionActive = true; resetSpeechTurnBuffer(); resetSpeakerTranscripts(); candidateContext = []; recentQuestion = ''; lastSuggestion = ''; liveAnswerHistory = []; turnQueue = Promise.resolve();
     $('question').value = ''; $('transcriptCorrection').hidden = true; $('answerContent').hidden = true; $('answerEmpty').hidden = false;
     $('micStatus').textContent = 'Starting mobile microphone…';
     try { await startMobileSession(); }
@@ -663,7 +691,7 @@ else {
   $('micBtn').addEventListener('click', () => {
     if (micSessionActive) stopMicSession();
     else {
-      micSessionActive = true; resetSpeechTurnBuffer(); candidateContext = []; recentQuestion = ''; lastSuggestion = ''; liveAnswerHistory = []; turnQueue = Promise.resolve();
+      micSessionActive = true; resetSpeechTurnBuffer(); resetSpeakerTranscripts(); candidateContext = []; recentQuestion = ''; lastSuggestion = ''; liveAnswerHistory = []; turnQueue = Promise.resolve();
       $('question').value = ''; $('transcriptCorrection').hidden = true; $('answerContent').hidden = true; $('answerEmpty').hidden = false;
       $('micStatus').textContent = 'Starting microphone…';
       try { startRecognition(); } catch { micSessionActive = false; $('micStatus').textContent = 'Could not start microphone. Try again or type the question.'; }
