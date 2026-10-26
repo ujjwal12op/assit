@@ -123,6 +123,18 @@ function soundsLikeSuggestionReadback(utterance) {
   const shared = [...spokenWords].filter((word) => suggestionWords.has(word)).length;
   return spokenWords.size >= 6 && shared / spokenWords.size >= 0.78;
 }
+function soundsLikeCandidateStatement(utterance) {
+  const text = utterance.trim();
+  if (text.length < 12 || /\?\s*$/.test(text)) return false;
+  return /^(?:i\s+(?:built|used|worked|led|created|designed|implemented|managed|helped|learned|think|believe|prefer|started|focused|handled|owned|contributed|developed)\b|we\s+(?:built|used|worked|led|created|designed|implemented|managed|helped|started|focused|handled|owned|contributed|developed)\b|my\s+(?:background|experience|approach|role|project)\b|in\s+my\s+(?:last|previous|current|project|experience)\b)/i.test(text);
+}
+function recordCandidateSpeech(utterance, readback = false) {
+  if (!readback) candidateContext = [...candidateContext, utterance].slice(-8);
+  if ($('question').value.trim() === utterance.trim()) $('question').value = '';
+  $('micStatus').textContent = readback
+    ? 'Your spoken response was recognized; no new question generated.'
+    : 'Your response was recognized; waiting for the next interviewer question.';
+}
 try {
   const saved = JSON.parse(localStorage.getItem('interview-copilot-context') || '{}');
   for (const id of fields) if (typeof saved[id] === 'string') $(id).value = saved[id];
@@ -190,6 +202,11 @@ async function readSessionTurnStream(response) {
     if (eventName === 'delta' && typeof payload.text === 'string') {
       generated += payload.text;
       const partialClassification = partialJsonStringValue(generated, 'classification');
+      if (partialClassification === 'interviewer_question') {
+        $('micStatus').textContent = 'Question detected; drafting answer…';
+      } else if (partialClassification === 'candidate_answer') {
+        $('micStatus').textContent = 'Candidate response detected; no answer needed.';
+      }
       const partialAnswer = partialClassification === 'interviewer_question'
         ? partialJsonStringValue(generated, 'answer')
         : '';
@@ -216,6 +233,11 @@ async function readSessionTurnStream(response) {
 }
 async function classifySessionTurn(utterance, source = 'browser') {
   if (!micSessionActive) return;
+  const localReadback = soundsLikeSuggestionReadback(utterance);
+  if (localReadback || soundsLikeCandidateStatement(utterance)) {
+    recordCandidateSpeech(utterance, localReadback);
+    return;
+  }
   $('micStatus').textContent = 'Checking whether that was a question or an answer…';
   try {
     const response = await apiFetch('/api/session-turn', {
