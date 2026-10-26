@@ -308,6 +308,7 @@ function isLikelyInterviewQuestion(value) {
   if (/^(?:what|why|how|when|where|who|which)\s+(?:i|we)\b/i.test(text)) return false;
   return /^(?:what|why|how|when|where|who|which)\b/i.test(text)
     || /^(?:can|could|would|should|will|do|does|did|is|are|have|has)\b/i.test(text)
+    || /^(?:apply|use|show|give|write|find|create|implement|calculate|solve|return|explain|compare|define|list|describe|demonstrate|provide|generate|build|design|walk)\b/i.test(text)
     || /^(?:tell\s*(?:me|us)|let\s+me\s+know|walk\s*(?:me|us)(?:\s+through)?|talk\s*(?:me|us)(?:\s+through)?|let'?s\s+(?:talk|discuss|explore)|explain|describe|compare|difference\s+between|differentiate|write|implement|solve|calculate|outline|show\s+(?:me|us)|give\s+(?:me|us)\s+an\s+example|please\s+(?:explain|describe|compare|write|implement|solve)|i\s+was\s+wondering|i(?:'d|\s+would)\s+(?:like|love)\s+(?:you\s+to|to\s+(?:ask|hear|know|understand))|i\s+want\s+(?:you\s+to|to\s+ask)|i(?:'m|\s+am)\s+(?:curious|interested\s+in)|design\s+(?:a|an|the)|build\s+(?:a|an|the)|create\s+(?:a|an|the)|given\s+(?:a|an|the)|find\s+(?:a|an|the|all|the\s+first|the\s+last)|return\s+(?:a|an|the|the\s+value|the\s+result|the\s+answer)|you(?:'re|\s+are)\s+given|suppose|imagine|assume|consider|let'?s\s+say|what\s+about|how\s+about|your\s+(?:thoughts|experience|approach)\s+(?:on|to|with))\b/i.test(text)
     || /\b(?:can you|could you|would you|do you|does it|how would|what would|what happens|why does|how does|what is the difference|what's the difference|tell me why|explain how|explain why)\b/i.test(text)
     || /\b(?:what|why|how|when|where|who|which)\s+(?:is|are|was|were|do|does|did|can|could|would|should|will|has|have|had|does|did)\b/i.test(text)
@@ -316,7 +317,7 @@ function isLikelyInterviewQuestion(value) {
 function isContextualFollowUp(value) {
   if (!lastSuggestion) return false;
   const text = value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-  const hasFollowUpCue = /\b(?:how|why|what|where|when|who|which|explain|clarify|elaborate|expand|mean|use|using|approach|method|version|alternative|instead)\b/i.test(text);
+  const hasFollowUpCue = /\b(?:how|why|what|where|when|who|which|explain|clarify|elaborate|expand|mean|use|using|apply|show|give|write|approach|method|version|alternative|instead)\b/i.test(text);
   if (!hasFollowUpCue) return false;
   if (/\b(?:you said|you mentioned|you stated|you just said|when you said|when you mentioned|your answer|your explanation|earlier you|same thing|same point|that point|that part|what do you mean|how so|why so|can you explain|could you explain|expand on|elaborate on|clarify that|what about|how about|what if|the query you gave|the code you gave|explain (?:that|this|it|the query|the code|the answer)|(?:the|that|this|same|previous|above) (?:query|code|answer|solution|example|line|step)|what does (?:the|that|this) (?:query|code|answer) do)\b/i.test(text)) return true;
   // Follow-up requests often name a different technique while referring to
