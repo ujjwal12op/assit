@@ -123,13 +123,19 @@ function soundsLikeSuggestionReadback(utterance) {
   const normalize = (value) => value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
   const spoken = normalize(utterance); const suggestion = normalize(lastSuggestion);
   if (spoken.length < 18 || !suggestion) return false;
-  if (suggestion.includes(spoken)) return true;
   const fillerWords = new Set(['about', 'after', 'again', 'also', 'because', 'could', 'every', 'first', 'from', 'have', 'just', 'more', 'most', 'over', 'same', 'some', 'that', 'their', 'there', 'these', 'they', 'this', 'through', 'under', 'very', 'what', 'when', 'where', 'which', 'while', 'with', 'would', 'your']);
   const contentWords = (value) => value.split(' ').filter((word) => word.length > 2 && !fillerWords.has(word));
   const spokenWords = new Set(contentWords(spoken));
-  const suggestionWords = new Set(contentWords(suggestion));
+  const suggestionSequence = contentWords(suggestion);
+  const suggestionWords = new Set(suggestionSequence);
   const shared = [...spokenWords].filter((word) => suggestionWords.has(word)).length;
-  return spokenWords.size >= 3 && shared >= 3 && shared / spokenWords.size >= 0.68;
+  if (spokenWords.size >= 6 && shared >= 5 && shared / spokenWords.size >= 0.68) return true;
+  // Recognition can split a readback into short chunks. Match the start of the
+  // displayed answer too, so its first chunk does not get mistaken for a question.
+  if (spokenWords.size < 3) return false;
+  const spokenSequence = contentWords(spoken);
+  const prefixMatches = spokenSequence.filter((word, index) => word === suggestionSequence[index]).length;
+  return prefixMatches >= 3 && prefixMatches / spokenSequence.length >= 0.75;
 }
 function soundsLikeCandidateStatement(utterance) {
   const text = utterance.trim();
@@ -137,7 +143,7 @@ function soundsLikeCandidateStatement(utterance) {
   return /^(?:i\s+(?:built|used|worked|led|created|designed|implemented|managed|helped|learned|think|believe|prefer|started|focused|handled|owned|contributed|developed)\b|we\s+(?:built|used|worked|led|created|designed|implemented|managed|helped|started|focused|handled|owned|contributed|developed)\b|my\s+(?:background|experience|approach|role|project)\b|in\s+my\s+(?:last|previous|current|project|experience)\b)/i.test(text);
 }
 function recordCandidateSpeech(utterance, readback = false) {
-  if (!readback) candidateContext = [...candidateContext, utterance].slice(-8);
+  candidateContext = [...candidateContext, utterance].slice(-8);
   if ($('question').value.trim() === utterance.trim()) $('question').value = '';
   $('micStatus').textContent = readback
     ? 'Your spoken response was recognized; no new question generated.'
@@ -291,9 +297,9 @@ async function classifySessionTurn(utterance, source = 'browser') {
   const speechTurnId = ++activeSpeechTurnId;
   const localReadback = soundsLikeSuggestionReadback(utterance);
   const isFollowUp = isContextualFollowUp(utterance);
-  // A close match to the answer already on screen is the candidate reading it
-  // aloud, even when ASR adds question punctuation. Explicit follow-ups still pass.
-  if (localReadback && !isFollowUp) {
+  // Treat read-aloud of the current suggestion as the candidate's turn, even if
+  // ASR adds question punctuation or the sentence contains question-like words.
+  if (localReadback) {
     recordCandidateSpeech(utterance, true);
     return;
   }
