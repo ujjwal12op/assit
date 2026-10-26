@@ -81,7 +81,13 @@ const server = createServer(async (req, res) => {
         const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', { method: 'POST', headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY, 'content-type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ inlineData: { mimeType: audioMimeType, data: audioData } }] }], generationConfig: { audioTranscriptionConfig: { mode: 'SMART', customVocabulary } } }), signal: AbortSignal.timeout(25_000) });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) return json(res, response.status === 429 ? 429 : 502, { error: payload.error?.message || 'Gemini could not transcribe this audio. The microphone is still listening.' });
-        const transcript = payload.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('').trim() || '';
+        const transcript = (payload.candidates || []).flatMap((candidate) => candidate.content?.parts || []).map((part) => {
+          if (typeof part.text === 'string' && part.text.trim()) return part.text.trim();
+          const audioText = part.audioTranscription?.text;
+          if (typeof audioText === 'string' && audioText.trim()) return audioText.trim();
+          const words = part.audioTranscription?.words;
+          return Array.isArray(words) ? words.map((word) => word.word || '').join(' ').trim() : '';
+        }).filter(Boolean).join('\n').trim();
         return json(res, 200, { transcript });
       } catch (error) {
         return json(res, error.name === 'TimeoutError' ? 504 : 502, { error: error.name === 'TimeoutError' ? 'Mobile audio transcription timed out. The microphone is still listening.' : 'Mobile audio transcription failed. The microphone is still listening.' });
