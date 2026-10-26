@@ -221,6 +221,14 @@ function selectSpeechAlternative(result) {
   }
   return bestText;
 }
+function addSpeechContextBias(instance) {
+  const Phrase = window.SpeechRecognitionPhrase;
+  if (typeof Phrase !== 'function' || !('phrases' in instance)) return;
+  const terms = [...interviewDomainTerms()].filter((term) => term.length >= 2).slice(0, 100);
+  try {
+    instance.phrases = terms.map((phrase) => new Phrase(phrase, 4));
+  } catch { /* Contextual biasing is optional and not supported by every browser. */ }
+}
 function addTranscriptLine(role, utterance) {
   const transcript = role === 'interviewer' ? interviewerTranscript : candidateTranscript;
   const clean = utterance.trim();
@@ -433,7 +441,9 @@ function enqueueSessionTurn(utterance, source = 'browser') {
   const clean = utterance.trim();
   if (!clean || clean.length < 3) return;
   const normalized = clean.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-  if (normalized === lastSubmittedSpeech && Date.now() - lastSubmittedSpeechAt < 5_000) return;
+  // Keep accidental duplicate finals out, but let a user repeat a missed question
+  // without the retry being swallowed by the duplicate guard.
+  if (normalized === lastSubmittedSpeech && Date.now() - lastSubmittedSpeechAt < 900) return;
   if (pendingSessionUtterance) {
     const previous = pendingSessionUtterance.trim();
     const previousNorm = previous.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -454,7 +464,7 @@ function enqueueSessionTurn(utterance, source = 'browser') {
     const stableUtterance = pendingSessionUtterance.trim();
     pendingSessionUtterance = '';
     const stableNorm = stableUtterance.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-    if (!stableUtterance || (stableNorm === lastSubmittedSpeech && Date.now() - lastSubmittedSpeechAt < 5_000)) return;
+    if (!stableUtterance || (stableNorm === lastSubmittedSpeech && Date.now() - lastSubmittedSpeechAt < 900)) return;
     lastSubmittedSpeech = stableNorm;
     lastSubmittedSpeechAt = Date.now();
     const contextCorrectedUtterance = correctDomainSpeechTerms(stableUtterance);
@@ -517,6 +527,7 @@ if (mobileBrowser && SpeechRecognition) {
       instance.interimResults = true;
       instance.maxAlternatives = 5;
       instance.lang = navigator.language || 'en-US';
+      addSpeechContextBias(instance);
       instance.onstart = () => {
         if (instance !== mobileRecognizer || !micSessionActive) return;
         mobileRetryDelay = 400;
@@ -560,7 +571,12 @@ if (mobileBrowser && SpeechRecognition) {
       instance.onend = () => {
         if (instance !== mobileRecognizer) return;
         mobileRecognizer = null;
-        scheduleMobileRecognitionRestart();
+        // Android Chrome commonly ends one-shot recognition after each phrase.
+        // Restart quickly so a follow-up question does not begin in a long gap.
+        mobileRestartTimer = setTimeout(() => {
+          mobileRestartTimer = null;
+          if (micSessionActive) startMobileRecognition();
+        }, 120);
       };
       instance.start();
     } catch {
@@ -706,6 +722,7 @@ else {
     const instance = new SpeechRecognition();
     recognition = instance;
     instance.continuous = true; instance.interimResults = true; instance.maxAlternatives = 5; instance.lang = navigator.language || 'en-US';
+    addSpeechContextBias(instance);
     startupTimer = setTimeout(() => {
       if (instance !== recognition || !micSessionActive) return;
       $('micStatus').textContent = 'Speech service did not connect; retrying…';
