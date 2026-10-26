@@ -146,7 +146,11 @@ async function generate() {
   } catch (error) { $('answerEmpty').hidden = false; showToast(error.message || 'Network error. Please retry.'); }
   finally { $('loading').hidden = true; $('generateBtn').disabled = false; }
 }
-async function classifySessionTurn(utterance) {
+function isLikelyMobileQuestion(value) {
+  const text = value.trim().replace(/\s+/g, ' ');
+  return text.includes('?') || /^(?:what|why|how|when|where|who|which)\s+(?:is|are|was|were|do|does|did|can|could|would|should|will|have|has|had)\b/i.test(text) || /^(?:can|could|would|should|will|do|does|did|is|are|have|has)\b/i.test(text) || /^(?:tell me about|walk me through|explain|describe|compare|write|implement|solve|give me an example of)\b/i.test(text);
+}
+async function classifySessionTurn(utterance, source = 'browser') {
   if (!micSessionActive) return;
   $('micStatus').textContent = 'Checking whether that was a question or an answer…';
   try {
@@ -157,7 +161,14 @@ async function classifySessionTurn(utterance) {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not classify the spoken turn.');
     if (!micSessionActive) return;
-    if (data.classification === 'interviewer_question' && data.answer) {
+    const mobileText = data.correctedUtterance || data.question || utterance;
+    const mobileQuestionFallback = source === 'mobile' && data.classification !== 'interviewer_question' && isLikelyMobileQuestion(mobileText);
+    if (mobileQuestionFallback) {
+      recentQuestion = mobileText; $('question').value = mobileText;
+      $('micStatus').textContent = 'Mobile question recognized; generating its answer…';
+      await generate();
+      if (micSessionActive) $('micStatus').textContent = 'Mobile question answer ready.';
+    } else if (data.classification === 'interviewer_question' && data.answer) {
       recentQuestion = data.correctedUtterance || data.question || utterance; $('question').value = recentQuestion;
       const corrections = Array.isArray(data.transcriptionCorrections) ? data.transcriptionCorrections : [];
       const correctionNote = $('transcriptCorrection');
@@ -168,19 +179,23 @@ async function classifySessionTurn(utterance) {
       displayAnswer(data); lastSuggestion = data.answer;
       $('micStatus').textContent = `Interviewer question detected · ${(Number(data.latencyMs || 0) / 1000).toFixed(1)}s`;
     } else if (data.classification === 'candidate_answer') {
+      if (source === 'mobile' && $('question').value === utterance) $('question').value = '';
       const readback = data.isReadingSuggestion === true || soundsLikeSuggestionReadback(utterance);
       if (!readback) candidateContext = [...candidateContext, data.correctedUtterance || utterance].slice(-8);
       $('micStatus').textContent = readback ? 'Your spoken response was recognized; no new question generated.' : 'Your response was recognized; waiting for the next interviewer question.';
     } else {
-      $('micStatus').textContent = 'Speech heard, but I could not confidently tell whether it was a question. No answer generated.';
+      if (source === 'mobile') $('question').value = mobileText;
+      $('micStatus').textContent = source === 'mobile'
+        ? 'Speech recognized but unclear: "' + mobileText.slice(0, 140) + '". It is in the question box if you want to generate it manually.'
+        : 'Speech heard, but I could not confidently tell whether it was a question. No answer generated.';
     }
   } catch (error) { if (micSessionActive) $('micStatus').textContent = error.message || 'Could not process speech. Still listening.'; }
 }
 initializeAccess();
-function enqueueSessionTurn(utterance) {
+function enqueueSessionTurn(utterance, source = 'browser') {
   const clean = utterance.trim();
   if (!clean || clean.length < 3) return;
-  turnQueue = turnQueue.then(() => classifySessionTurn(clean)).catch(() => {});
+  turnQueue = turnQueue.then(() => classifySessionTurn(clean, source)).catch(() => {});
 }
 $('generateBtn').addEventListener('click', generate);
 document.addEventListener('keydown', (event) => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); generate(); } });
@@ -204,7 +219,8 @@ if (mobileRecorderAvailable) {
     if (!response.ok) throw new Error(result.error || 'Could not transcribe this audio.');
     const transcript = typeof result.transcript === 'string' ? result.transcript.trim() : '';
     if (!transcript) { $('micStatus').textContent = 'Audio captured, but no clear words were recognized. Keep speaking normally; I am still listening.'; return; }
-    enqueueSessionTurn(transcript);
+    $('question').value = transcript;
+    enqueueSessionTurn(transcript, 'mobile');
     if (micSessionActive) $('micStatus').textContent = 'Speech recognized. Checking whether it was a question or an answer…';
   }
   function startMobileRecording() {
