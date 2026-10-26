@@ -206,7 +206,96 @@ $('profileNav').addEventListener('click', () => { $('profile').focus(); $('profi
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const mobileBrowser = Boolean(navigator.userAgentData?.mobile) || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const mobileRecorderAvailable = mobileBrowser && Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
-if (mobileRecorderAvailable) {
+if (mobileBrowser && SpeechRecognition) {
+  let mobileRecognizer = null;
+  let mobileRestartTimer = null;
+  let mobileRetryDelay = 400;
+  function scheduleMobileRecognitionRestart() {
+    if (!micSessionActive || mobileRestartTimer) return;
+    mobileRestartTimer = setTimeout(() => {
+      mobileRestartTimer = null;
+      if (micSessionActive) startMobileRecognition();
+    }, mobileRetryDelay);
+    mobileRetryDelay = Math.min(Math.round(mobileRetryDelay * 1.5), 2_000);
+  }
+  function startMobileRecognition() {
+    if (!micSessionActive || mobileRecognizer) return;
+    try {
+      const instance = new SpeechRecognition();
+      mobileRecognizer = instance;
+      instance.continuous = false;
+      instance.interimResults = true;
+      instance.lang = navigator.language || 'en-US';
+      instance.onstart = () => {
+        if (instance !== mobileRecognizer || !micSessionActive) return;
+        mobileRetryDelay = 400;
+        $('micBtn').setAttribute('aria-pressed', 'true');
+        $('micBtn').innerHTML = '<span>●</span> Stop session';
+        $('micStatus').textContent = 'Mobile listening. Recognition restarts automatically after each spoken turn.';
+      };
+      instance.onresult = (event) => {
+        if (instance !== mobileRecognizer || !micSessionActive) return;
+        const finalParts = [];
+        let interim = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const text = event.results[i][0]?.transcript?.trim() || '';
+          if (event.results[i].isFinal) finalParts.push(text);
+          else interim += text;
+        }
+        if (finalParts.length) {
+          const transcript = finalParts.join(' ').trim();
+          $('question').value = transcript;
+          $('micStatus').textContent = 'Speech recognized. Checking the question…';
+          enqueueSessionTurn(transcript, 'mobile');
+        } else if (interim) {
+          $('micStatus').textContent = 'Hearing: ' + interim.slice(-120);
+        }
+      };
+      instance.onerror = (event) => {
+        if (instance !== mobileRecognizer) return;
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          micSessionActive = false;
+          mobileRecognizer = null;
+          $('micBtn').setAttribute('aria-pressed', 'false');
+          $('micBtn').innerHTML = '<span>●</span> Start session';
+          $('micStatus').textContent = 'Microphone or speech recognition permission was denied. Allow it for this site and try again.';
+          clearTimeout(mobileRestartTimer);
+          mobileRestartTimer = null;
+        } else if (micSessionActive) {
+          $('micStatus').textContent = 'Mobile speech service interrupted; reconnecting…';
+        }
+      };
+      instance.onend = () => {
+        if (instance !== mobileRecognizer) return;
+        mobileRecognizer = null;
+        scheduleMobileRecognitionRestart();
+      };
+      instance.start();
+    } catch {
+      mobileRecognizer = null;
+      scheduleMobileRecognitionRestart();
+    }
+  }
+  function stopMobileRecognitionSession() {
+    micSessionActive = false;
+    if (mobileRestartTimer) clearTimeout(mobileRestartTimer);
+    mobileRestartTimer = null;
+    const active = mobileRecognizer;
+    mobileRecognizer = null;
+    try { active?.stop(); } catch { /* It may already have stopped. */ }
+    $('micBtn').setAttribute('aria-pressed', 'false');
+    $('micBtn').innerHTML = '<span>●</span> Start session';
+    $('micStatus').textContent = 'Session stopped. Spoken turns are not saved.';
+  }
+  $('micBtn').addEventListener('click', () => {
+    if (micSessionActive) { stopMobileRecognitionSession(); return; }
+    micSessionActive = true;
+    candidateContext = []; recentQuestion = ''; lastSuggestion = ''; turnQueue = Promise.resolve();
+    $('question').value = ''; $('transcriptCorrection').hidden = true; $('answerContent').hidden = true; $('answerEmpty').hidden = false;
+    $('micStatus').textContent = 'Starting mobile speech recognition…';
+    startMobileRecognition();
+  });
+} else if (mobileRecorderAvailable) {
   let mobileStream = null, mobileRecorder = null, mobileAudioContext = null, mobileAnalyser = null, mobileFrame = null, mobileWakeLock = null;
   let mobileChunks = [], mobileSpeechAt = 0, mobileRecordingAt = 0, mobileMimeType = '';
   const mobileSamples = new Float32Array(512);
