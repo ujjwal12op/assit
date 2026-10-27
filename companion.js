@@ -161,8 +161,13 @@ connectButton.addEventListener('click', async () => {
   }
   connectButton.disabled = true;
   status.textContent = 'Connecting · choose a tab or screen and enable audio sharing…';
+  let pendingAudioContext = null;
   try {
-    // Call directly from the click handler because browsers require a user gesture.
+    // Create/resume audio and request sharing synchronously from the Connect
+    // click. Waiting for the pairing HTTP request first can let Chrome suspend
+    // a newly-created context, leaving a valid share with a zero audio meter.
+    pendingAudioContext = new AudioContext();
+    const audioContextReady = pendingAudioContext.resume();
     const capturePromise = navigator.mediaDevices.getDisplayMedia({
       video: { displaySurface: 'browser' },
       audio: { suppressLocalAudioPlayback: false },
@@ -181,10 +186,12 @@ connectButton.addEventListener('click', async () => {
         : 'The selected source did not provide an audio track. Choose the actual meeting tab or a Window with audio and enable audio sharing.');
     }
     captureStream = capture;
+    await audioContextReady;
+    if (pendingAudioContext.state !== 'running') throw new Error('Chrome kept the audio monitor suspended. Click Connect again and allow audio playback.');
     const joined = await request('join', { code });
     pairId = joined.id;
-    audioContext = new AudioContext();
-    await audioContext.resume();
+    audioContext = pendingAudioContext;
+    pendingAudioContext = null;
     analyser = audioContext.createAnalyser();
     analyser.fftSize = 512;
     audioContext.createMediaStreamSource(new MediaStream(capture.getAudioTracks())).connect(analyser);
@@ -201,6 +208,7 @@ connectButton.addEventListener('click', async () => {
       : 'Connected · listening for interviewer audio.';
     monitorAudio();
   } catch (error) {
+    if (pendingAudioContext && pendingAudioContext.state !== 'closed') await pendingAudioContext.close().catch(() => {});
     if (pairId) {
       try { await request('stop', { id: pairId, role: 'laptop' }); } catch { /* The phone may have expired this pairing. */ }
     }
