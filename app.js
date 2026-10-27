@@ -855,12 +855,29 @@ $('micBtn').addEventListener('click', () => {
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const mobileBrowser = Boolean(navigator.userAgentData?.mobile) || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const mobileRecorderAvailable = mobileBrowser && Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+if (mobileBrowser) {
+  const control = $('mobileTranscriptionControl');
+  const browserOption = $('mobileTranscriptionMethod').querySelector('option[value="browser"]');
+  const geminiOption = $('mobileTranscriptionMethod').querySelector('option[value="gemini"]');
+  control.hidden = false;
+  if (!SpeechRecognition) browserOption.textContent = 'Browser Speech API (Experimental · unsupported)';
+  browserOption.disabled = !SpeechRecognition;
+  geminiOption.disabled = !mobileRecorderAvailable;
+  if (!mobileRecorderAvailable && SpeechRecognition) $('mobileTranscriptionMethod').value = 'browser';
+}
 if (mobileBrowser && SpeechRecognition) {
+  const transcriptionControl = $('mobileTranscriptionControl');
+  const transcriptionMethod = $('mobileTranscriptionMethod');
+  transcriptionControl.hidden = false;
+  let mobileMethod = 'gemini';
+  let geminiStream = null, geminiRecorder = null, geminiAudioContext = null, geminiAnalyser = null, geminiFrame = null, geminiWakeLock = null;
+  let geminiChunks = [], geminiSpeechAt = 0, geminiRecordingAt = 0, geminiMimeType = '';
+  const geminiSamples = new Float32Array(512);
   let mobileRecognizer = null;
   let mobileRestartTimer = null;
   let mobileRetryDelay = 400;
   function scheduleMobileRecognitionRestart() {
-    if (!micSessionActive || mobileRestartTimer) return;
+    if (!micSessionActive || mobileMethod !== 'browser' || mobileRestartTimer) return;
     mobileRestartTimer = setTimeout(() => {
       mobileRestartTimer = null;
       if (micSessionActive) startMobileRecognition();
@@ -868,7 +885,7 @@ if (mobileBrowser && SpeechRecognition) {
     mobileRetryDelay = Math.min(Math.round(mobileRetryDelay * 1.5), 2_000);
   }
   function startMobileRecognition() {
-    if (!micSessionActive || mobileRecognizer) return;
+    if (!micSessionActive || mobileMethod !== 'browser' || mobileRecognizer) return;
     try {
       const instance = new SpeechRecognition();
       mobileRecognizer = instance;
@@ -877,14 +894,14 @@ if (mobileBrowser && SpeechRecognition) {
       instance.maxAlternatives = 5;
       instance.lang = 'en-IN';
       instance.onstart = () => {
-        if (instance !== mobileRecognizer || !micSessionActive) return;
+        if (instance !== mobileRecognizer || !micSessionActive || mobileMethod !== 'browser') return;
         mobileRetryDelay = 400;
         $('micBtn').setAttribute('aria-pressed', 'true');
         $('micBtn').innerHTML = '<span>●</span> Stop session';
         $('micStatus').textContent = 'Mobile listening. Recognition restarts automatically after each spoken turn.';
       };
       instance.onresult = (event) => {
-        if (instance !== mobileRecognizer || !micSessionActive) return;
+        if (instance !== mobileRecognizer || !micSessionActive || mobileMethod !== 'browser') return;
         const finalParts = [];
         let interim = '';
         for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -921,6 +938,7 @@ if (mobileBrowser && SpeechRecognition) {
         mobileRecognizer = null;
         // Android Chrome commonly ends one-shot recognition after each phrase.
         // Restart quickly so a follow-up question does not begin in a long gap.
+        if (mobileMethod !== 'browser') return;
         mobileRestartTimer = setTimeout(() => {
           mobileRestartTimer = null;
           if (micSessionActive) startMobileRecognition();
@@ -943,13 +961,115 @@ if (mobileBrowser && SpeechRecognition) {
     $('micBtn').innerHTML = '<span>●</span> Start session';
     $('micStatus').textContent = 'Session stopped. Spoken turns are not saved.';
   }
+  async function transcribeMobileGeminiAudio(blob) {
+    if (!micSessionActive || mobileMethod !== 'gemini' || blob.size < 1200) return;
+    $('micStatus').textContent = 'Transcribing speech with Gemini…';
+    const audioData = await fileToBase64(blob);
+    const response = await apiFetch('/api/transcribe-turn', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ audioData, audioMimeType: (blob.type || geminiMimeType).split(';')[0], role: $('role').value, profile: $('profile').value, resumeContext: $('resumeContext').value, jobDescription: $('jobDescription').value }) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not transcribe this audio.');
+    const transcript = typeof result.transcript === 'string' ? result.transcript.trim() : '';
+    if (!transcript) { $('micStatus').textContent = 'Audio captured, but no clear words were recognized. Still listening.'; return; }
+    if (mobileMethod !== 'gemini' || !micSessionActive) return;
+    $('question').value = transcript;
+    enqueueSessionTurn(transcript, 'mobile');
+    $('micStatus').textContent = 'Speech recognized. Checking whether it was a question or an answer…';
+  }
+  function startGeminiRecording() {
+    if (!micSessionActive || mobileMethod !== 'gemini' || !geminiStream || geminiRecorder?.state === 'recording') return;
+    geminiChunks = [];
+    try {
+      geminiRecorder = new MediaRecorder(geminiStream, geminiMimeType ? { mimeType: geminiMimeType } : undefined);
+      geminiRecordingAt = Date.now();
+      geminiRecorder.ondataavailable = (event) => { if (event.data?.size) geminiChunks.push(event.data); };
+      geminiRecorder.onerror = () => { if (mobileMethod === 'gemini') $('micStatus').textContent = 'Mobile audio capture interrupted; continuing to listen…'; };
+      geminiRecorder.onstop = () => {
+        const blob = new Blob(geminiChunks, { type: geminiMimeType || geminiChunks[0]?.type || 'audio/webm' });
+        geminiChunks = [];
+        if (!micSessionActive || mobileMethod !== 'gemini') return;
+        transcribeMobileGeminiAudio(blob).catch((error) => { if (micSessionActive && mobileMethod === 'gemini') $('micStatus').textContent = error.message || 'Transcription failed; still listening.'; });
+      };
+      geminiRecorder.start();
+    } catch { $('micStatus').textContent = 'Could not start mobile audio capture. Check microphone permission and try again.'; }
+  }
+  function monitorGeminiAudio() {
+    if (!micSessionActive || mobileMethod !== 'gemini' || !geminiAnalyser) return;
+    geminiAnalyser.getFloatTimeDomainData(geminiSamples);
+    let sum = 0;
+    for (const sample of geminiSamples) sum += sample * sample;
+    const now = Date.now(), level = Math.sqrt(sum / geminiSamples.length);
+    if (level > 0.006) { geminiSpeechAt = now; if (geminiRecorder?.state !== 'recording') startGeminiRecording(); }
+    if (geminiRecorder?.state === 'recording') {
+      const duration = now - geminiRecordingAt;
+      if (duration > 30_000 || (geminiSpeechAt && now - geminiSpeechAt > mobileAudioEndSilenceMs && duration > 750)) {
+        try { geminiRecorder.stop(); } catch { /* Already stopped. */ }
+      }
+    }
+    geminiFrame = requestAnimationFrame(monitorGeminiAudio);
+  }
+  async function startMobileGeminiSession() {
+    geminiStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: { ideal: 1 }, sampleRate: { ideal: 48_000 } } });
+    geminiAudioContext = new AudioContext(); await geminiAudioContext.resume();
+    geminiAnalyser = geminiAudioContext.createAnalyser(); geminiAnalyser.fftSize = 512;
+    geminiAudioContext.createMediaStreamSource(geminiStream).connect(geminiAnalyser);
+    geminiMimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac', 'audio/ogg;codecs=opus'].find((type) => MediaRecorder.isTypeSupported(type)) || '';
+    try { if (navigator.wakeLock?.request) geminiWakeLock = await navigator.wakeLock.request('screen'); } catch { /* Optional enhancement. */ }
+    $('micBtn').setAttribute('aria-pressed', 'true'); $('micBtn').innerHTML = '<span>●</span> Stop session';
+    $('micStatus').textContent = 'Mobile microphone is ready. Speak normally; Gemini will transcribe each turn.';
+    monitorGeminiAudio();
+  }
+  async function stopMobileGeminiSession() {
+    if (geminiFrame) cancelAnimationFrame(geminiFrame);
+    geminiFrame = null;
+    if (geminiRecorder?.state === 'recording') { try { geminiRecorder.stop(); } catch { /* Already stopped. */ } }
+    geminiStream?.getTracks().forEach((track) => track.stop()); geminiStream = null;
+    if (geminiAudioContext && geminiAudioContext.state !== 'closed') await geminiAudioContext.close().catch(() => {});
+    geminiAudioContext = null; geminiAnalyser = null;
+    try { await geminiWakeLock?.release(); } catch { /* The browser may release it automatically. */ }
+    geminiWakeLock = null;
+  }
+  async function startSelectedMobileTranscription() {
+    if (mobileMethod === 'browser') startMobileRecognition();
+    else await startMobileGeminiSession();
+  }
   $('micBtn').addEventListener('click', () => {
-    if (micSessionActive) { stopMobileRecognitionSession(); return; }
+    if (micSessionActive) {
+      micSessionActive = false;
+      stopMobileRecognitionSession();
+      stopMobileGeminiSession();
+      $('micBtn').setAttribute('aria-pressed', 'false'); $('micBtn').innerHTML = '<span>●</span> Start session';
+      $('micStatus').textContent = 'Session stopped. Spoken turns are not saved.';
+      return;
+    }
     micSessionActive = true;
     resetSpeechTurnBuffer(); resetSpeakerTranscripts(); candidateContext = []; recentQuestion = ''; lastSuggestion = ''; liveAnswerHistory = []; turnQueue = Promise.resolve();
     $('question').value = ''; $('transcriptCorrection').hidden = true; $('answerContent').hidden = true; $('answerEmpty').hidden = false;
-    $('micStatus').textContent = 'Starting mobile speech recognition…';
-    startMobileRecognition();
+    $('micStatus').textContent = mobileMethod === 'browser' ? 'Starting browser speech recognition…' : 'Starting mobile microphone…';
+    Promise.resolve(startSelectedMobileTranscription()).catch(async (error) => {
+      micSessionActive = false;
+      stopMobileRecognitionSession(); await stopMobileGeminiSession();
+      $('micBtn').setAttribute('aria-pressed', 'false'); $('micBtn').innerHTML = '<span>●</span> Start session';
+      $('micStatus').textContent = error.name === 'NotAllowedError' ? 'Microphone access was denied. Allow microphone access in your browser settings and try again.' : error.message || 'Could not start mobile transcription.';
+    });
+  });
+  transcriptionMethod.addEventListener('change', async () => {
+    mobileMethod = transcriptionMethod.value === 'browser' ? 'browser' : 'gemini';
+    if (!micSessionActive) {
+      $('micStatus').textContent = mobileMethod === 'browser' ? 'Browser Speech API selected (experimental). Gemini remains available.' : 'Gemini transcription selected.';
+      return;
+    }
+    const keepRunning = micSessionActive;
+    micSessionActive = false;
+    stopMobileRecognitionSession(); await stopMobileGeminiSession();
+    micSessionActive = keepRunning;
+    $('micStatus').textContent = mobileMethod === 'browser' ? 'Switching to Browser Speech API…' : 'Switching to Gemini transcription…';
+    try { await startSelectedMobileTranscription(); }
+    catch (error) {
+      micSessionActive = false;
+      $('micBtn').setAttribute('aria-pressed', 'false'); $('micBtn').innerHTML = '<span>●</span> Start session';
+      $('micStatus').textContent = error.name === 'NotAllowedError' ? 'Microphone access was denied. Allow it in browser settings and try again.' : error.message || 'Could not switch transcription method.';
+      await stopMobileGeminiSession();
+    }
   });
 } else if (mobileRecorderAvailable) {
   let mobileStream = null, mobileRecorder = null, mobileAudioContext = null, mobileAnalyser = null, mobileFrame = null, mobileWakeLock = null;

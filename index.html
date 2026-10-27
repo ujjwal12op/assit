@@ -49,7 +49,7 @@
             <div id="interviewerAudioStatus" class="muted" role="status" aria-live="polite">Create a secure pairing code, then enter it in the Windows system-audio helper.</div>
             <div id="interviewerAudioCode" class="pair-code" hidden></div>
           </div>
-          <div class="input-footer"><button id="micBtn" class="mic-button" aria-pressed="false"><span>●</span> Start session</button><button id="systemAudioBtn" class="mic-button" aria-pressed="false" type="button">Start System Audio</button><span id="micStatus" class="muted">Starts continuous listening. Stop the session when finished.</span></div>
+          <div class="input-footer"><button id="micBtn" class="mic-button" aria-pressed="false"><span>●</span> Start session</button><label id="mobileTranscriptionControl" class="mobile-transcription-control" hidden>Mobile transcription<select id="mobileTranscriptionMethod"><option value="gemini">Gemini (Current)</option><option value="browser">Browser Speech API (Experimental)</option></select></label><button id="systemAudioBtn" class="mic-button" aria-pressed="false" type="button">Start System Audio</button><span id="micStatus" class="muted">Starts continuous listening. Stop the session when finished.</span></div>
           <div class="speaker-transcripts" aria-live="polite" aria-label="Live speaker transcripts">
             <div id="interviewerTranscriptPanel" class="speaker-transcript" hidden><strong>Interviewer</strong><p id="interviewerTranscript"></p></div>
             <div id="candidateTranscriptPanel" class="speaker-transcript" hidden><strong>You</strong><p id="candidateTranscript"></p></div>
