@@ -15,6 +15,8 @@ let speechAt = 0;
 let recordingAt = 0;
 let uploading = Promise.resolve();
 let stopping = false;
+let sendingAudio = false;
+let lastDiagnosticAt = 0;
 const samples = new Float32Array(512);
 
 async function request(action, details = {}) {
@@ -42,7 +44,12 @@ function startRecording() {
       const blob = new Blob(chunks, { type: mimeType || chunks[0]?.type || 'audio/webm' });
       chunks = [];
       if (recorder === activeRecorder) recorder = null;
-      if (blob.size < 1_200 || !pairId) return;
+      if (blob.size < 1_200 || !pairId) {
+        status.textContent = 'Audio activity was detected, but the browser produced no usable recording. Try sharing the meeting tab or window audio.';
+        return;
+      }
+      sendingAudio = true;
+      status.textContent = 'Interviewer speech captured · sending audio to your phone…';
       const audioMimeType = (blob.type || 'audio/webm').split(';')[0];
       uploading = uploading.then(async () => {
         const audioData = await new Promise((resolve, reject) => {
@@ -56,6 +63,7 @@ function startRecording() {
           try {
             await request('upload', { id: pairId, audioData, audioMimeType });
             status.textContent = 'Connected · interviewer audio is being sent to your phone.';
+            sendingAudio = false;
             return;
           } catch (error) {
             lastError = error;
@@ -63,8 +71,10 @@ function startRecording() {
           }
         }
         status.textContent = (lastError?.message || 'Upload failed.') + ' Capture remains active; retrying with the next segment.';
+        sendingAudio = false;
       }).catch((error) => {
         status.textContent = error.message || 'Could not send this audio segment.';
+        sendingAudio = false;
       });
     };
     activeRecorder.start();
@@ -83,8 +93,8 @@ function stopRecording() {
 function monitorAudio() {
   if (!pairId || !analyser || stopping) return;
   analyser.getFloatTimeDomainData(samples);
-  let sum = 0;
-  for (const sample of samples) sum += sample * sample;
+  let sum = 0, peak = 0;
+  for (const sample of samples) { sum += sample * sample; peak = Math.max(peak, Math.abs(sample)); }
   const level = Math.sqrt(sum / samples.length);
   const now = Date.now();
   if (level > 0.0035) {
@@ -94,6 +104,15 @@ function monitorAudio() {
   if (recorder?.state === 'recording') {
     const duration = now - recordingAt;
     if (duration >= 25_000 || (speechAt && now - speechAt > 1_000 && duration > 750)) stopRecording();
+  }
+  if (now - lastDiagnosticAt > 1_200 && !sendingAudio && recorder?.state !== 'recording') {
+    lastDiagnosticAt = now;
+    const surface = captureStream?.getVideoTracks()[0]?.getSettings?.().displaySurface;
+    if (level < 0.0008) {
+      status.textContent = 'Connected, but no audio signal is reaching the laptop page · RMS ' + level.toFixed(4) + ' · peak ' + peak.toFixed(3) + '. Choose the Chrome Tab playing the interviewer or a Window with audio.';
+    } else {
+      status.textContent = 'Audio signal detected · RMS ' + level.toFixed(4) + ' · peak ' + peak.toFixed(3) + (surface ? ' · source: ' + surface : '') + ' · waiting for a pause to send the phrase.';
+    }
   }
   animationFrame = requestAnimationFrame(monitorAudio);
 }
@@ -145,12 +164,17 @@ connectButton.addEventListener('click', async () => {
       video: true,
       audio: true,
       systemAudio: 'include',
+      windowAudio: 'system',
       selfBrowserSurface: 'exclude'
     });
     const capture = await capturePromise;
     if (!capture.getAudioTracks().length) {
+      const surface = capture.getVideoTracks()[0]?.getSettings?.().displaySurface;
       capture.getTracks().forEach((track) => track.stop());
-      throw new Error('The selected source did not provide audio. Choose a tab or source and enable audio sharing.');
+      const isChrome = /Chrome\/\d+/.test(navigator.userAgent) && !/Edg\//.test(navigator.userAgent);
+      throw new Error(isChrome && surface === 'monitor'
+        ? 'Chrome does not provide audio when Entire Screen is selected. Choose the Chrome Tab playing the interviewer and enable Share tab audio, or select a Window with audio.'
+        : 'The selected source did not provide an audio track. Choose the actual meeting tab or a Window with audio and enable audio sharing.');
     }
     captureStream = capture;
     const joined = await request('join', { code });
@@ -167,7 +191,10 @@ connectButton.addEventListener('click', async () => {
     pairInput.disabled = true;
     connectButton.disabled = true;
     stopButton.disabled = false;
-    status.textContent = 'Connected · listening for interviewer audio.';
+    const surface = capture.getVideoTracks()[0]?.getSettings?.().displaySurface;
+    status.textContent = surface === 'monitor'
+      ? 'Connected to Entire Screen. Chrome may not include audio for this source; choose the Chrome Tab or Window playing the interviewer if the audio level stays at zero.'
+      : 'Connected · listening for interviewer audio.';
     monitorAudio();
   } catch (error) {
     if (pairId) {
