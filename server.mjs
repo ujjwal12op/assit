@@ -301,7 +301,10 @@ const server = createServer(async (req, res) => {
         : isLiveAnswer
           ? { question, codingRequest, requestedLanguage: requestedLanguage || null, profile: profile.slice(0, 2_000), resumeContext: resumeContext.slice(0, 3_000), jobDescription: jobDescription.slice(0, 1_800), role: role.slice(0, 160), company: company.slice(0, 120), style, mode, candidateStatementsSoFar: candidateContext.slice(-3).map((item) => item.slice(0, 200)), previousInterviewerQuestion: recentQuestion.slice(0, 500), lastCopilotAnswer: lastSuggestion.slice(0, 2_000), sessionAnswerHistory: sessionHistory }
           : { question, profile, resumeContext, jobDescription, role, company, style, mode };
-      const wantsStream = (isSessionTurn || isLiveAnswer) && req.headers.accept?.includes('text/event-stream');
+      // Structured code responses are more reliable as one complete JSON body;
+      // ordinary interview answers keep their existing low-latency stream.
+      const wantsStream = (isSessionTurn || isLiveAnswer) && req.headers.accept?.includes('text/event-stream') && !codingRequest;
+      const requestTimeoutMs = codingRequest ? 30_000 : 18_000;
       const requestModel = async (model, stream = false, tokenLimit = null, timeoutMs = 18_000) => fetch(
         aiProvider === 'anthropic'
           ? 'https://api.anthropic.com/v1/messages'
@@ -333,21 +336,21 @@ const server = createServer(async (req, res) => {
       );
       let response;
       try {
-        try { response = await requestModel(primaryModel, wantsStream); }
+        try { response = await requestModel(primaryModel, wantsStream, null, requestTimeoutMs); }
         catch (error) {
           if (error.name !== 'TimeoutError' || fallbackModel === primaryModel) throw error;
-          response = await requestModel(fallbackModel, wantsStream);
+          response = await requestModel(fallbackModel, wantsStream, null, requestTimeoutMs);
         }
         if (response.status === 503 || (aiProvider === 'anthropic' && response.status === 529)) {
           await response.body?.cancel();
           if (wantsStream && fallbackModel !== primaryModel) {
-            response = await requestModel(fallbackModel, true);
+            response = await requestModel(fallbackModel, true, null, requestTimeoutMs);
           } else {
             await new Promise((resolve) => setTimeout(resolve, 500));
-            response = await requestModel(primaryModel);
+            response = await requestModel(primaryModel, false, null, requestTimeoutMs);
             if ((response.status === 503 || (aiProvider === 'anthropic' && response.status === 529)) && fallbackModel !== primaryModel) {
               await response.body?.cancel();
-              response = await requestModel(fallbackModel);
+              response = await requestModel(fallbackModel, false, null, requestTimeoutMs);
             }
           }
         }
