@@ -150,6 +150,19 @@ function soundsLikeFirstPersonAnswer(utterance) {
     || /^(?:(?:well|yeah|yes|okay|alright|so|and|but|because)[,\s]+)+(?:i|we|my|our)\b/i.test(text)
     || /(?:[.!?]\s+|\b(?:and|but|because|so)\s+)(?:i|we)\s+(?:am|was|were|have|had|will|would|can|could|did|do|used|use|built|worked|led|created|designed|implemented|managed|helped|learned|think|believe|prefer|started|focused|handled|owned|contributed|developed)\b/i.test(text);
 }
+function isClearInterviewerFollowUp(utterance) {
+  const text = utterance.trim().replace(/^(?:(?:um|uh|hmm|so|okay|well|and|right|now|then)[, ]+)+/i, '');
+  // Candidate explanations often contain question-like words ("what I did",
+  // "how I built it") or question punctuation from ASR. Preserve those turns.
+  if (soundsLikeFirstPersonAnswer(text) || soundsLikeCandidateStatement(text)) return false;
+  return /\b(?:can|could|would|will|should)\s+you\b/i.test(text)
+    || /^(?:can|could|would|will|should|do|does|did|is|are|have|has)\b/i.test(text)
+    || /^(?:what|why|how|when|where|who|which)\b/i.test(text) && !/^(?:what|why|how|when|where|who|which)\s+(?:i|we)\b/i.test(text)
+    || /^(?:tell|show|give|walk|talk|explain|describe|compare|write|implement|solve|calculate)\s+(?:me|us)\b/i.test(text)
+    || /^(?:please\s+)?(?:apply|use|show|give|write|find|create|implement|calculate|solve|return|explain|compare|define|list|describe|demonstrate|provide|generate|build|design|walk)\b/i.test(text)
+    || /\b(?:same|previous|above|this|that)\s+(?:question|query|problem|code|answer)\b/i.test(text)
+      && /\b(?:apply|use|show|give|write|find|create|implement|calculate|solve|return|explain|compare|describe)\b/i.test(text);
+}
 function interviewDomainContext() {
   return [ $('role').value, $('profile').value, $('resumeContext').value, $('jobDescription').value ].join(' ');
 }
@@ -430,12 +443,22 @@ async function classifySessionTurn(utterance, source = 'browser') {
     recordCandidateSpeech(utterance);
     return;
   }
+  // Once an answer is on screen, ambiguous speech belongs to the candidate by
+  // default. Only an unmistakable question or direct request from the
+  // interviewer may replace it. A single microphone cannot prove speaker
+  // identity, so question-shaped punctuation alone must not trigger a rewrite.
+  if (lastSuggestion && !isClearInterviewerFollowUp(utterance)) {
+    recordCandidateSpeech(utterance);
+    return;
+  }
   const hasClearCandidateLead = soundsLikeCandidateStatement(utterance);
   // The first meaningful turn in a session is normally the interviewer's opening
   // question. Browser ASR often drops its opening words or punctuation, so don't
   // discard that first turn just because the transcript is imperfect.
   const isFirstInterviewerTurn = !recentQuestion && !lastSuggestion && !hasClearCandidateLead;
-  const isQuestion = isLikelyInterviewQuestion(utterance) || isFollowUp || isFirstInterviewerTurn;
+  const isQuestion = lastSuggestion
+    ? isClearInterviewerFollowUp(utterance)
+    : isLikelyInterviewQuestion(utterance) || isFollowUp || isFirstInterviewerTurn;
   if (isQuestion) {
     if (!isFollowUp) {
       liveAnswerHistory = [];
