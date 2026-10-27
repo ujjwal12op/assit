@@ -501,6 +501,188 @@ document.querySelectorAll('[data-view-target]').forEach((button) => {
   button.addEventListener('click', () => setWorkspaceView(button.dataset.viewTarget));
 });
 
+// Optional system playback capture. This uses the browser's explicit
+// screen/tab-share permission prompt and sends only captured audio for ASR.
+// Existing microphone recognition remains on its current path.
+const systemAudioBtn = $('systemAudioBtn');
+let systemAudioActive = false;
+let systemAudioCapture = null;
+let systemAudioContext = null;
+let systemAudioAnalyser = null;
+let systemAudioFrame = null;
+let systemAudioRecorder = null;
+let systemAudioChunks = [];
+let systemAudioMimeType = '';
+let systemAudioSpeechAt = 0;
+let systemAudioRecordingAt = 0;
+let systemAudioLastDiagnosticAt = 0;
+let systemAudioTurnPending = false;
+const systemAudioSamples = new Float32Array(512);
+
+function resetTranscriptionSession() {
+  resetSpeechTurnBuffer(); resetSpeakerTranscripts(); candidateContext = [];
+  recentQuestion = ''; lastSuggestion = ''; liveAnswerHistory = []; turnQueue = Promise.resolve();
+  $('question').value = ''; $('transcriptCorrection').hidden = true;
+  $('answerContent').hidden = true; $('answerEmpty').hidden = false;
+}
+
+function stopSystemAudioSession(message = 'System audio session stopped.') {
+  if (!systemAudioActive) return;
+  systemAudioActive = false;
+  micSessionActive = false;
+  if (systemAudioFrame) cancelAnimationFrame(systemAudioFrame);
+  systemAudioFrame = null;
+  const recorder = systemAudioRecorder;
+  systemAudioRecorder = null;
+  if (recorder?.state === 'recording') { try { recorder.stop(); } catch { /* Already stopping. */ } }
+  systemAudioCapture?.getTracks().forEach((track) => track.stop());
+  systemAudioCapture = null;
+  if (systemAudioContext && systemAudioContext.state !== 'closed') systemAudioContext.close().catch(() => {});
+  systemAudioContext = null; systemAudioAnalyser = null; systemAudioChunks = [];
+  systemAudioBtn.setAttribute('aria-pressed', 'false');
+  systemAudioBtn.textContent = 'Start System Audio';
+  $('micStatus').textContent = message;
+}
+
+async function transcribeSystemAudioTurn(blob) {
+  if (!systemAudioActive || blob.size < 1_200) return;
+  $('micStatus').textContent = 'Transcribing system audio…';
+  try {
+    const response = await apiFetch('/api/transcribe-turn', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        audioData: await fileToBase64(blob),
+        audioMimeType: (blob.type || systemAudioMimeType || 'audio/webm').split(';')[0],
+        role: $('role').value, profile: $('profile').value,
+        resumeContext: $('resumeContext').value, jobDescription: $('jobDescription').value
+      })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not transcribe system audio.');
+    const transcript = typeof result.transcript === 'string' ? result.transcript.trim() : '';
+    if (transcript) {
+      $('question').value = transcript;
+      enqueueSessionTurn(transcript, 'system-audio');
+      if (systemAudioActive) $('micStatus').textContent = 'System audio recognized. Checking the question…';
+    } else if (systemAudioActive) $('micStatus').textContent = 'System audio captured, but no clear words were recognized. Still listening.';
+  } catch (error) {
+    if (systemAudioActive) $('micStatus').textContent = error.message || 'System audio transcription failed; still listening.';
+  }
+}
+
+function startSystemAudioRecording() {
+  if (!systemAudioActive || systemAudioTurnPending || !systemAudioCapture || systemAudioRecorder?.state === 'recording') return;
+  const audioOnlyStream = new MediaStream(systemAudioCapture.getAudioTracks());
+  systemAudioChunks = [];
+  try {
+    systemAudioRecorder = new MediaRecorder(audioOnlyStream, systemAudioMimeType ? { mimeType: systemAudioMimeType } : undefined);
+    const recorder = systemAudioRecorder;
+    systemAudioRecordingAt = Date.now();
+    recorder.ondataavailable = (event) => { if (event.data?.size) systemAudioChunks.push(event.data); };
+    recorder.onerror = () => { if (systemAudioActive) $('micStatus').textContent = 'System audio capture interrupted; trying to continue…'; };
+    recorder.onstop = () => {
+      const blob = new Blob(systemAudioChunks, { type: systemAudioMimeType || systemAudioChunks[0]?.type || 'audio/webm' });
+      systemAudioChunks = [];
+      if (systemAudioRecorder === recorder) systemAudioRecorder = null;
+      systemAudioTurnPending = true;
+      transcribeSystemAudioTurn(blob).finally(() => { systemAudioTurnPending = false; });
+    };
+    recorder.start();
+  } catch {
+    systemAudioRecorder = null;
+    $('micStatus').textContent = 'This browser could not record the shared audio source.';
+  }
+}
+
+function stopSystemAudioRecording() {
+  if (systemAudioRecorder?.state === 'recording') {
+    try { systemAudioRecorder.stop(); } catch { /* Already stopping. */ }
+  }
+}
+
+function monitorSystemAudio() {
+  if (!systemAudioActive || !systemAudioAnalyser) return;
+  systemAudioAnalyser.getFloatTimeDomainData(systemAudioSamples);
+  let sum = 0, peak = 0;
+  for (const sample of systemAudioSamples) { sum += sample * sample; peak = Math.max(peak, Math.abs(sample)); }
+  const level = Math.sqrt(sum / systemAudioSamples.length), now = Date.now();
+  if (level > 0.0035) {
+    systemAudioSpeechAt = now;
+    if (systemAudioRecorder?.state !== 'recording') startSystemAudioRecording();
+  }
+  if (systemAudioRecorder?.state === 'recording') {
+    const duration = now - systemAudioRecordingAt;
+    if (duration >= 20_000 || (systemAudioSpeechAt && now - systemAudioSpeechAt > 1_500 && duration > 1_200)) stopSystemAudioRecording();
+  }
+  if (now - systemAudioLastDiagnosticAt > 1_200 && $('micStatus').textContent !== 'Transcribing system audio…') {
+    systemAudioLastDiagnosticAt = now;
+    $('micStatus').textContent = `System audio is active · level ${level.toFixed(3)} · peak ${peak.toFixed(3)}. Keep this share active.`;
+  }
+  if (systemAudioActive) systemAudioFrame = requestAnimationFrame(monitorSystemAudio);
+}
+
+async function startSystemAudioSession() {
+  if (typeof navigator.mediaDevices?.getDisplayMedia !== 'function') {
+    systemAudioActive = false; micSessionActive = false;
+    systemAudioBtn.setAttribute('aria-pressed', 'false'); systemAudioBtn.textContent = 'Start System Audio';
+    $('micStatus').textContent = 'System Audio is not supported by this browser. Use the microphone mode here, or open the app in a supported desktop browser.';
+    return;
+  }
+  if (!window.MediaRecorder || typeof AudioContext === 'undefined') {
+    systemAudioActive = false; micSessionActive = false;
+    systemAudioBtn.setAttribute('aria-pressed', 'false'); systemAudioBtn.textContent = 'Start System Audio';
+    $('micStatus').textContent = 'This browser cannot record shared system audio. Microphone mode is still available.';
+    return;
+  }
+  try {
+    const capture = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true, systemAudio: 'include', selfBrowserSurface: 'exclude' });
+    if (!systemAudioActive) { capture.getTracks().forEach((track) => track.stop()); return; }
+    if (!capture.getAudioTracks().length) {
+      capture.getTracks().forEach((track) => track.stop());
+      systemAudioActive = false; micSessionActive = false;
+      systemAudioBtn.setAttribute('aria-pressed', 'false'); systemAudioBtn.textContent = 'Start System Audio';
+      $('micStatus').textContent = 'The selected share did not provide audio. Choose a tab or device audio source and enable audio sharing.';
+      return;
+    }
+    systemAudioCapture = capture;
+    const audioStream = new MediaStream(capture.getAudioTracks());
+    systemAudioContext = new AudioContext();
+    await systemAudioContext.resume();
+    systemAudioAnalyser = systemAudioContext.createAnalyser(); systemAudioAnalyser.fftSize = 512;
+    systemAudioContext.createMediaStreamSource(audioStream).connect(systemAudioAnalyser);
+    systemAudioMimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'].find((type) => MediaRecorder.isTypeSupported(type)) || '';
+    capture.getTracks().forEach((track) => { track.onended = () => stopSystemAudioSession('System audio sharing ended. Start it again to continue.'); });
+    systemAudioBtn.setAttribute('aria-pressed', 'true'); systemAudioBtn.textContent = 'Stop System Audio';
+    $('micStatus').textContent = 'System audio shared. Transcription starts when audio is detected.';
+    monitorSystemAudio();
+  } catch (error) {
+    const message = error.name === 'NotAllowedError'
+      ? 'System audio permission was denied or cancelled. Microphone mode remains available.'
+      : error.message || 'Could not start system audio capture. Microphone mode remains available.';
+    if (systemAudioActive) stopSystemAudioSession(message);
+    else $('micStatus').textContent = message;
+  }
+}
+
+systemAudioBtn.addEventListener('click', async () => {
+  if (systemAudioActive) { stopSystemAudioSession(); return; }
+  if (micSessionActive) {
+    $('micBtn').click();
+    $('micStatus').textContent = 'Microphone stopped. Tap Start System Audio again to choose a playback source.';
+    return;
+  }
+  resetTranscriptionSession();
+  systemAudioActive = true; micSessionActive = true;
+  $('micStatus').textContent = 'Choose a screen, tab, or audio source and allow its audio to be shared.';
+  await startSystemAudioSession();
+});
+
+// Switching back to microphone explicitly stops the shared playback source so
+// both paths can never submit the same speech at the same time.
+$('micBtn').addEventListener('click', () => {
+  if (systemAudioActive) stopSystemAudioSession('System audio stopped. Starting microphone mode…');
+}, { capture: true });
+
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const mobileBrowser = Boolean(navigator.userAgentData?.mobile) || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const mobileRecorderAvailable = mobileBrowser && Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);

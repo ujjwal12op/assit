@@ -35,6 +35,8 @@ main{margin-left:235px;max-width:1260px;padding:0 48px 28px}.topbar{height:68px;
 #interviewPanel .question-card{min-height:auto}
 #interviewPanel .question-input{height:112px}
 @media(max-width:700px){
+  .input-footer{flex-wrap:wrap}
+  .input-footer #micStatus{flex-basis:100%;order:3}
   .topbar{height:auto;min-height:51px;gap:8px;flex-wrap:wrap;padding:9px 0}
   .view-tabs{display:grid;grid-template-columns:1fr 1fr;width:100%;margin:11px 0 13px}
   .view-tab{padding:10px 6px;font-size:12px}
