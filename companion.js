@@ -17,6 +17,12 @@ let stopping = false;
 let sendingAudio = false;
 let lastDiagnosticAt = 0;
 const samples = new Float32Array(512);
+const isDesktopAudioApp = window.interviewCopilotDesktop?.systemAudioLoopback === true;
+
+if (isDesktopAudioApp) {
+  const hint = document.querySelector('.hint');
+  if (hint) hint.textContent = 'This desktop app captures Windows playback directly, including audio sent to connected headphones. Keep the app open and use the six-character code shown in your phone session.';
+}
 
 async function request(action, details = {}) {
   const response = await fetch('/api/interviewer-audio-pair', {
@@ -113,9 +119,13 @@ function monitorAudio() {
     const surface = videoTrack?.getSettings?.().displaySurface;
     if (level < 0.0008) {
       const audioState = audioTrack ? 'track ' + audioTrack.readyState + (audioTrack.muted ? ', muted' : '') + (audioTrack.enabled ? '' : ', disabled') : 'no audio track';
-      status.textContent = 'Connected, but the selected source is silent · RMS ' + level.toFixed(4) + ' · peak ' + peak.toFixed(3) + (surface ? ' · source: ' + surface : '') + ' · ' + audioState + '. Choose the Chrome Tab playing the interviewer and enable Share tab audio.';
+      status.textContent = isDesktopAudioApp
+        ? 'No Windows playback signal · RMS ' + level.toFixed(4) + ' · peak ' + peak.toFixed(3) + ' · ' + audioState + '. Check that audio is playing and Windows is outputting to the intended device. Headphones are supported.'
+        : 'Connected, but the selected source is silent · RMS ' + level.toFixed(4) + ' · peak ' + peak.toFixed(3) + (surface ? ' · source: ' + surface : '') + ' · ' + audioState + '. Choose the Chrome Tab playing the interviewer and enable Share tab audio.';
     } else {
-      status.textContent = 'Audio signal detected · RMS ' + level.toFixed(4) + ' · peak ' + peak.toFixed(3) + (surface ? ' · source: ' + surface : '') + ' · waiting for a pause to send the phrase.';
+      status.textContent = isDesktopAudioApp
+        ? 'Windows playback detected · RMS ' + level.toFixed(4) + ' · peak ' + peak.toFixed(3) + ' · waiting for a pause to send the phrase.'
+        : 'Audio signal detected · RMS ' + level.toFixed(4) + ' · peak ' + peak.toFixed(3) + (surface ? ' · source: ' + surface : '') + ' · waiting for a pause to send the phrase.';
     }
   }
   animationFrame = requestAnimationFrame(monitorAudio);
@@ -161,7 +171,7 @@ connectButton.addEventListener('click', async () => {
     return;
   }
   connectButton.disabled = true;
-  status.textContent = 'Connecting · choose a tab or screen and enable audio sharing…';
+  status.textContent = isDesktopAudioApp ? 'Connecting to Windows playback audio…' : 'Connecting · choose a tab or screen and enable audio sharing…';
   let pendingAudioContext = null;
   try {
     // Create/resume audio and request sharing synchronously from the Connect
@@ -204,7 +214,9 @@ connectButton.addEventListener('click', async () => {
     connectButton.disabled = true;
     stopButton.disabled = false;
     const surface = capture.getVideoTracks()[0]?.getSettings?.().displaySurface;
-    status.textContent = surface === 'monitor'
+    status.textContent = isDesktopAudioApp
+      ? 'Connected · capturing Windows playback audio, including headphones. Start or continue interviewer playback.'
+      : surface === 'monitor'
       ? 'Connected to Entire Screen. Chrome may not include audio for this source; choose the Chrome Tab or Window playing the interviewer if the audio level stays at zero.'
       : surface === 'browser'
       ? 'Connected to this Chrome Tab · capture stays on this tab. To capture another tab, stop and reconnect choosing that tab.'

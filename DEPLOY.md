@@ -40,3 +40,7 @@ For production with multiple users, replace the shared password with managed aut
 Use a current desktop Chrome browser on Windows for the laptop capture page. The companion preselects the **Chrome Tab** picker and excludes **Entire Screen**. Select the tab that is actually playing the interviewer and enable **Share tab audio**. A tab share stays attached to that one selected tab; stop and reconnect to switch tabs. It also requests system audio when a Window is selected in Chrome versions that support the **windowAudio** capture hint. If the selected source has no audio track or no audio signal, the companion reports that. The existing server transcription configuration (including **GEMINI_API_KEY** when using its Gemini fallback) must be available.
 
 Audio segments and pairing state are held in server memory only; recordings are not written to disk. Both devices must reach the same running server instance. A server restart or expired pairing requires creating a new code and reconnecting.
+
+### Windows desktop companion
+
+For direct Windows playback capture (including headphone output), build and install the desktop companion in `desktop/`. It opens the same hosted app, so sign in with the existing app password, then open **Open laptop companion page** and enter the phone's pairing code. Windows loopback audio replaces the Chrome share picker; the phone continues to receive audio through the existing relay and transcription route. See `desktop/README.md` for build steps.
