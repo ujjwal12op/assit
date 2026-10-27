@@ -107,9 +107,12 @@ function monitorAudio() {
   }
   if (now - lastDiagnosticAt > 1_200 && !sendingAudio && recorder?.state !== 'recording') {
     lastDiagnosticAt = now;
-    const surface = captureStream?.getVideoTracks()[0]?.getSettings?.().displaySurface;
+    const videoTrack = captureStream?.getVideoTracks()[0];
+    const audioTrack = captureStream?.getAudioTracks()[0];
+    const surface = videoTrack?.getSettings?.().displaySurface;
     if (level < 0.0008) {
-      status.textContent = 'Connected, but no audio signal is reaching the laptop page · RMS ' + level.toFixed(4) + ' · peak ' + peak.toFixed(3) + '. Choose the Chrome Tab playing the interviewer or a Window with audio.';
+      const audioState = audioTrack ? 'track ' + audioTrack.readyState + (audioTrack.muted ? ', muted' : '') + (audioTrack.enabled ? '' : ', disabled') : 'no audio track';
+      status.textContent = 'Connected, but the selected source is silent · RMS ' + level.toFixed(4) + ' · peak ' + peak.toFixed(3) + (surface ? ' · source: ' + surface : '') + ' · ' + audioState + '. Choose the Chrome Tab playing the interviewer and enable Share tab audio.';
     } else {
       status.textContent = 'Audio signal detected · RMS ' + level.toFixed(4) + ' · peak ' + peak.toFixed(3) + (surface ? ' · source: ' + surface : '') + ' · waiting for a pause to send the phrase.';
     }
@@ -161,8 +164,9 @@ connectButton.addEventListener('click', async () => {
   try {
     // Call directly from the click handler because browsers require a user gesture.
     const capturePromise = navigator.mediaDevices.getDisplayMedia({
-      video: true,
-      audio: true,
+      video: { displaySurface: 'browser' },
+      audio: { suppressLocalAudioPlayback: false },
+      monitorTypeSurfaces: 'exclude',
       systemAudio: 'include',
       windowAudio: 'system',
       selfBrowserSurface: 'exclude'
