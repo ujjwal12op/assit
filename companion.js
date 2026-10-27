@@ -9,7 +9,6 @@ let audioContext = null;
 let analyser = null;
 let animationFrame = null;
 let recorder = null;
-let chunks = [];
 let mimeType = '';
 let speechAt = 0;
 let recordingAt = 0;
@@ -32,17 +31,19 @@ async function request(action, details = {}) {
 
 function startRecording() {
   if (!pairId || !captureStream || recorder?.state === 'recording') return;
-  chunks = [];
+  // Every MediaRecorder owns its own chunk list. A new utterance can start
+  // before the prior recorder's asynchronous stop event fires; a shared list
+  // lets the new start clear or mix the previous utterance's audio.
+  const recorderChunks = [];
   try {
     const audioOnlyStream = new MediaStream(captureStream.getAudioTracks());
     recorder = new MediaRecorder(audioOnlyStream, mimeType ? { mimeType } : undefined);
     const activeRecorder = recorder;
     recordingAt = Date.now();
-    activeRecorder.ondataavailable = (event) => { if (event.data?.size) chunks.push(event.data); };
+    activeRecorder.ondataavailable = (event) => { if (event.data?.size) recorderChunks.push(event.data); };
     activeRecorder.onerror = () => { status.textContent = 'Audio capture was interrupted. Check the sharing permission.'; };
     activeRecorder.onstop = () => {
-      const blob = new Blob(chunks, { type: mimeType || chunks[0]?.type || 'audio/webm' });
-      chunks = [];
+      const blob = new Blob(recorderChunks, { type: mimeType || recorderChunks[0]?.type || 'audio/webm' });
       if (recorder === activeRecorder) recorder = null;
       if (blob.size < 1_200 || !pairId) {
         status.textContent = 'Audio activity was detected, but the browser produced no usable recording. Try sharing the meeting tab or window audio.';
@@ -205,6 +206,8 @@ connectButton.addEventListener('click', async () => {
     const surface = capture.getVideoTracks()[0]?.getSettings?.().displaySurface;
     status.textContent = surface === 'monitor'
       ? 'Connected to Entire Screen. Chrome may not include audio for this source; choose the Chrome Tab or Window playing the interviewer if the audio level stays at zero.'
+      : surface === 'browser'
+      ? 'Connected to this Chrome Tab · capture stays on this tab. To capture another tab, stop and reconnect choosing that tab.'
       : 'Connected · listening for interviewer audio.';
     monitorAudio();
   } catch (error) {
