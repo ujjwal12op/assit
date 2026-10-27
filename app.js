@@ -642,7 +642,7 @@ async function pollLaptopInterviewerAudio() {
   try {
     const result = await interviewerAudioRequest('poll', { id: interviewerAudioPairId });
     if (!interviewerAudioPairId || interviewerAudioStopping) return;
-    if (!result.connected) $('interviewerAudioStatus').textContent = 'Waiting for the laptop companion to connect…';
+    if (!result.connected) $('interviewerAudioStatus').textContent = 'Waiting for the Windows audio helper to connect…';
     else if (result.audio) {
       $('interviewerAudioStatus').textContent = 'Interviewer audio received · transcribing…';
       await transcribeLaptopInterviewerAudio(result.audio);
@@ -661,12 +661,12 @@ async function stopLaptopInterviewerAudio(updateServer = true) {
   interviewerAudioPairId = '';
   $('interviewerAudioCode').hidden = true;
   $('interviewerAudioCode').textContent = '';
-  interviewerAudioBtn.textContent = 'Connect laptop audio';
+  interviewerAudioBtn.textContent = 'Pair laptop helper';
   if (updateServer && pairId) {
     try { await interviewerAudioRequest('stop', { id: pairId, role: 'phone' }); } catch { /* The pairing may already have expired. */ }
   }
   interviewerAudioStopping = false;
-  $('interviewerAudioStatus').textContent = 'Laptop interviewer audio disconnected. The phone microphone is unchanged.';
+  $('interviewerAudioStatus').textContent = 'Laptop system audio disconnected. The phone microphone is unchanged.';
 }
 
 interviewerAudioBtn.addEventListener('click', async () => {
@@ -678,8 +678,8 @@ interviewerAudioBtn.addEventListener('click', async () => {
     interviewerAudioPairId = pair.id;
     $('interviewerAudioCode').textContent = 'Pairing code: ' + pair.code;
     $('interviewerAudioCode').hidden = false;
-    interviewerAudioBtn.textContent = 'Disconnect laptop audio';
-    $('interviewerAudioStatus').textContent = 'Open the companion page on your laptop, enter this code, and share a tab or system audio.';
+    interviewerAudioBtn.textContent = 'Stop laptop pairing';
+    $('interviewerAudioStatus').textContent = 'Enter this code in the Windows system-audio helper. It captures your selected playback device directly.';
     pollLaptopInterviewerAudio();
   } catch (error) {
     $('interviewerAudioStatus').textContent = error.message || 'Could not create the laptop audio connection.';

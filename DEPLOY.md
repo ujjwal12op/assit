@@ -29,18 +29,16 @@ For a local run, put `AI_PROVIDER=anthropic` and `ANTHROPIC_API_KEY=...` in your
 
 For production with multiple users, replace the shared password with managed authentication, persistent session storage, per-user authorization, and durable usage quotas.
 
-## Laptop interviewer audio
+## Windows interviewer audio
 
-1. Sign in to the app on your phone and open the Interview Room.
-2. Select **Connect laptop audio** and keep the displayed six-character pairing code visible.
-3. On the Windows laptop, open the same app host at **/companion** and sign in with the same shared app password.
-4. Enter the phone's code and select **Connect Interviewer Audio**. In the browser sharing prompt, choose a tab or system-audio source that contains the interviewer and enable audio sharing.
-5. The laptop companion uploads short speech segments over the app's HTTPS connection. The phone relays them through the existing **/api/transcribe-turn** transcription route. Stop either audio channel independently.
+The browser share companion has been replaced by a small Windows helper using WASAPI loopback capture. It records the selected Windows output directly (including headphone output), then uploads short speech WAV segments to the existing authenticated pairing queue. The phone continues to run its existing transcription and answer-generation path; its microphone remains available.
 
-Use a current desktop Chrome browser on Windows for the laptop capture page. The companion preselects the **Chrome Tab** picker and excludes **Entire Screen**. Select the tab that is actually playing the interviewer and enable **Share tab audio**. A tab share stays attached to that one selected tab; stop and reconnect to switch tabs. It also requests system audio when a Window is selected in Chrome versions that support the **windowAudio** capture hint. If the selected source has no audio track or no audio signal, the companion reports that. The existing server transcription configuration (including **GEMINI_API_KEY** when using its Gemini fallback) must be available.
+1. Deploy the current repository so the server accepts `audio/wav` on the existing audio-pair and transcription endpoints.
+2. On the phone, sign in, open the Interview Room, and choose **Pair laptop helper**. Keep the six-character code visible.
+3. Run `laptop-audio-helper/dist/Interview Copilot System Audio.exe` on Windows.
+4. Enter the same app URL, shared app password, and phone pairing code in the helper. Select the Windows output currently playing the interviewer and choose **Connect and start capture**.
+5. Confirm the helper playback meter moves. The phone should show the captured interviewer turn and generate its answer. Stop the helper when finished.
 
-Audio segments and pairing state are held in server memory only; recordings are not written to disk. Both devices must reach the same running server instance. A server restart or expired pairing requires creating a new code and reconnecting.
+Build the helper from source with Python 3.12 on Windows: `cd laptop-audio-helper`, `python -m pip install -r requirements.txt`, then `build.ps1`. It creates the executable in `dist/`.
 
-### Windows desktop companion
-
-For direct Windows playback capture (including headphone output), build and install the desktop companion in `desktop/`. It opens the same hosted app, so sign in with the existing app password, then open **Open laptop companion page** and enter the phone's pairing code. Windows loopback audio replaces the Chrome share picker; the phone continues to receive audio through the existing relay and transcription route. See `desktop/README.md` for build steps.
+The helper keeps the password and audio in memory and does not save recordings or credentials. Pairing state and audio segments remain in server memory. Both devices must use the same running server instance. A server restart or expired pairing requires a new code and reconnect.

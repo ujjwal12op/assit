@@ -178,7 +178,7 @@ const server = createServer(async (req, res) => {
         const code = typeof data.code === 'string' ? data.code.trim().toUpperCase() : '';
         const pair = [...interviewerAudioPairs.values()].find((item) => item.code === code);
         if (!pair) return json(res, 404, { error: 'That pairing code is invalid or expired. Create a new code on your phone.' });
-        if (accessProtected() && pair.mobileSessionId === sessionId) return json(res, 400, { error: 'Open the companion page on your laptop, not the phone.' });
+        if (accessProtected() && pair.mobileSessionId === sessionId) return json(res, 400, { error: 'Connect from the Windows audio helper using its separate app session.' });
         pair.laptopSessionId = sessionId;
         pair.lastActivity = Date.now();
         return json(res, 200, { id: pair.id, connected: true });
@@ -188,10 +188,10 @@ const server = createServer(async (req, res) => {
       if (!pair) return json(res, 404, { error: 'Audio connection expired. Connect again from your phone.' });
       pair.lastActivity = Date.now();
       if (data.action === 'upload') {
-        if (pair.laptopSessionId !== sessionId) return json(res, 403, { error: 'This device is not connected as the laptop audio source.' });
+        if (pair.laptopSessionId !== sessionId) return json(res, 403, { error: 'This session is not paired as the laptop audio source.' });
         const audioData = typeof data.audioData === 'string' ? data.audioData : '';
         const audioMimeType = typeof data.audioMimeType === 'string' ? data.audioMimeType.toLowerCase() : '';
-        if (!new Set(['audio/webm', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/m4a']).has(audioMimeType)
+        if (!new Set(['audio/webm', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/m4a', 'audio/wav']).has(audioMimeType)
           || !audioData || audioData.length > 2_800_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(audioData)) {
           return json(res, 400, { error: 'Audio segment is too large or in an unsupported format.' });
         }
@@ -224,7 +224,7 @@ const server = createServer(async (req, res) => {
       const data = await readJson(req);
       const audioData = typeof data.audioData === 'string' ? data.audioData : '';
       const audioMimeType = typeof data.audioMimeType === 'string' ? data.audioMimeType.toLowerCase() : '';
-      const supportedAudioTypes = new Set(['audio/webm', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/m4a']);
+      const supportedAudioTypes = new Set(['audio/webm', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/m4a', 'audio/wav']);
       if (!supportedAudioTypes.has(audioMimeType) || !audioData || audioData.length > 5_000_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(audioData)) return json(res, 400, { error: 'Mobile audio was not in a supported format. Restart the session and try again.' });
       const context = [typeof data.role === 'string' ? data.role.slice(0, 300) : '', typeof data.profile === 'string' ? data.profile.slice(0, 6_000) : '', typeof data.resumeContext === 'string' ? data.resumeContext.slice(0, 6_000) : '', typeof data.jobDescription === 'string' ? data.jobDescription.slice(0, 6_000) : ''].filter(Boolean).join(String.fromCharCode(10));
       const dataEngineeringContext = /\bdata\s*(?:engineer|engineering)|\b(?:pyspark|apache spark|spark sql|airflow|databricks|data pipeline|etl|elt|hadoop|kafka|snowflake|data warehouse)\b/i.test(context);
@@ -597,7 +597,7 @@ const server = createServer(async (req, res) => {
       }
       return json(res, 200, { ...result, codeBlocks: Array.isArray(result.codeBlocks) ? result.codeBlocks : [], latencyMs: Date.now() - started });
     }
-    const assets = { '/': ['index.html', 'text/html; charset=utf-8'], '/companion': ['companion.html', 'text/html; charset=utf-8'], '/companion.html': ['companion.html', 'text/html; charset=utf-8'], '/companion.js': ['companion.js', 'text/javascript; charset=utf-8'], '/companion.css': ['companion.css', 'text/css; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/speech-buffer.js': ['speech-buffer.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'] };
+    const assets = { '/': ['index.html', 'text/html; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/speech-buffer.js': ['speech-buffer.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'] };
     if (req.method === 'GET' && assets[url.pathname]) {
       const [file, type] = assets[url.pathname];
       res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });

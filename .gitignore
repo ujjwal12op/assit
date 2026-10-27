@@ -4,3 +4,7 @@ node_modules/
 npm-debug.log*
 *.zip
 /desktop/dist/
+/laptop-audio-helper/build/
+/laptop-audio-helper/dist/
+/laptop-audio-helper/__pycache__/
+*.spec
