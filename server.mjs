@@ -22,6 +22,8 @@ const maxBody = 6_000_000;
 const sessions = new Map();
 const requestWindows = new Map();
 const loginWindows = new Map();
+const interviewerAudioPairs = new Map();
+const interviewerPairingAttempts = new Map();
 const sessionCookie = 'interview_copilot_session';
 const accessProtected = () => process.env.NODE_ENV === 'production' || Boolean(process.env.RENDER) || Boolean(process.env.APP_PASSWORD);
 function json(res, status, data) {
@@ -53,6 +55,12 @@ function takeRateLimit(map, key, limit, windowMs) {
   const now = Date.now(); const bucket = map.get(key);
   if (!bucket || now - bucket.startedAt >= windowMs) { map.set(key, { startedAt: now, count: 1 }); return true; }
   bucket.count += 1; return bucket.count <= limit;
+}
+function pruneInterviewerAudioPairs() {
+  const now = Date.now();
+  for (const [id, pair] of interviewerAudioPairs) {
+    if (now - pair.lastActivity > 10 * 60_000 || now - pair.createdAt > 60 * 60_000) interviewerAudioPairs.delete(id);
+  }
 }
 function cookieHeader(value, maxAge) {
   const secure = process.env.NODE_ENV === 'production' || Boolean(process.env.RENDER);
@@ -149,6 +157,63 @@ const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: true });
     if (req.method === 'GET' && url.pathname === '/api/session') return json(res, 200, { authenticated: Boolean(sessionFor(req)), protected: accessProtected() });
+    if (req.method === 'POST' && url.pathname === '/api/interviewer-audio-pair') {
+      if (!sameOrigin(req)) return json(res, 403, { error: 'Request origin was rejected.' });
+      const sessionId = sessionFor(req);
+      if (!sessionId) return json(res, 401, { error: 'Sign in to connect interviewer audio.' });
+      pruneInterviewerAudioPairs();
+      const data = await readJson(req);
+      if (data.action === 'create') {
+        if (!takeRateLimit(interviewerPairingAttempts, sessionId, 12, 60_000)) return json(res, 429, { error: 'Too many pairing attempts. Wait briefly and try again.' });
+        if (interviewerAudioPairs.size >= 10) return json(res, 503, { error: 'Too many audio sessions are active. Try again shortly.' });
+        const id = randomBytes(18).toString('base64url');
+        let code;
+        do { code = randomBytes(3).toString('hex').toUpperCase(); }
+        while ([...interviewerAudioPairs.values()].some((pair) => pair.code === code));
+        interviewerAudioPairs.set(id, { id, code, mobileSessionId: sessionId, laptopSessionId: null, queue: [], createdAt: Date.now(), lastActivity: Date.now() });
+        return json(res, 200, { id, code });
+      }
+      if (data.action === 'join') {
+        if (!takeRateLimit(interviewerPairingAttempts, sessionId, 12, 60_000)) return json(res, 429, { error: 'Too many pairing attempts. Wait briefly and try again.' });
+        const code = typeof data.code === 'string' ? data.code.trim().toUpperCase() : '';
+        const pair = [...interviewerAudioPairs.values()].find((item) => item.code === code);
+        if (!pair) return json(res, 404, { error: 'That pairing code is invalid or expired. Create a new code on your phone.' });
+        if (accessProtected() && pair.mobileSessionId === sessionId) return json(res, 400, { error: 'Open the companion page on your laptop, not the phone.' });
+        pair.laptopSessionId = sessionId;
+        pair.lastActivity = Date.now();
+        return json(res, 200, { id: pair.id, connected: true });
+      }
+      const id = typeof data.id === 'string' ? data.id : '';
+      const pair = interviewerAudioPairs.get(id);
+      if (!pair) return json(res, 404, { error: 'Audio connection expired. Connect again from your phone.' });
+      pair.lastActivity = Date.now();
+      if (data.action === 'upload') {
+        if (pair.laptopSessionId !== sessionId) return json(res, 403, { error: 'This device is not connected as the laptop audio source.' });
+        const audioData = typeof data.audioData === 'string' ? data.audioData : '';
+        const audioMimeType = typeof data.audioMimeType === 'string' ? data.audioMimeType.toLowerCase() : '';
+        if (!new Set(['audio/webm', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/m4a']).has(audioMimeType)
+          || !audioData || audioData.length > 2_800_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(audioData)) {
+          return json(res, 400, { error: 'Audio segment is too large or in an unsupported format.' });
+        }
+        if (pair.queue.length >= 8) return json(res, 429, { error: 'The phone is catching up. Pause briefly while audio is delivered.' });
+        pair.queue.push({ audioData, audioMimeType });
+        return json(res, 200, { accepted: true });
+      }
+      if (data.action === 'poll') {
+        if (pair.mobileSessionId !== sessionId) return json(res, 403, { error: 'This device is not connected as the phone.' });
+        const audio = pair.queue.shift() || null;
+        return json(res, 200, { connected: Boolean(pair.laptopSessionId), audio });
+      }
+      if (data.action === 'stop') {
+        if (data.role === 'phone' && pair.mobileSessionId === sessionId) interviewerAudioPairs.delete(id);
+        else if (data.role === 'laptop' && pair.laptopSessionId === sessionId) {
+          pair.laptopSessionId = null;
+          pair.queue = [];
+        } else return json(res, 403, { error: 'This device is not part of the audio connection.' });
+        return json(res, 200, { stopped: true });
+      }
+      return json(res, 400, { error: 'Unsupported audio connection action.' });
+    }
     if (req.method === 'POST' && url.pathname === '/api/transcribe-turn') {
       const sessionId = sessionFor(req);
       if (!sessionId) return json(res, 401, { error: 'Sign in to continue.' });
@@ -532,7 +597,7 @@ const server = createServer(async (req, res) => {
       }
       return json(res, 200, { ...result, codeBlocks: Array.isArray(result.codeBlocks) ? result.codeBlocks : [], latencyMs: Date.now() - started });
     }
-    const assets = { '/': ['index.html', 'text/html; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/speech-buffer.js': ['speech-buffer.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'] };
+    const assets = { '/': ['index.html', 'text/html; charset=utf-8'], '/companion': ['companion.html', 'text/html; charset=utf-8'], '/companion.html': ['companion.html', 'text/html; charset=utf-8'], '/companion.js': ['companion.js', 'text/javascript; charset=utf-8'], '/companion.css': ['companion.css', 'text/css; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/speech-buffer.js': ['speech-buffer.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'] };
     if (req.method === 'GET' && assets[url.pathname]) {
       const [file, type] = assets[url.pathname];
       res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });

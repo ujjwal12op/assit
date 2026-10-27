@@ -28,3 +28,15 @@ To switch the deployed app to Claude, open the Render service's **Environment** 
 For a local run, put `AI_PROVIDER=anthropic` and `ANTHROPIC_API_KEY=...` in your untracked `.env` file. Do not paste API keys into source files or commit them.
 
 For production with multiple users, replace the shared password with managed authentication, persistent session storage, per-user authorization, and durable usage quotas.
+
+## Laptop interviewer audio
+
+1. Sign in to the app on your phone and open the Interview Room.
+2. Select **Connect laptop audio** and keep the displayed six-character pairing code visible.
+3. On the Windows laptop, open the same app host at **/companion** and sign in with the same shared app password.
+4. Enter the phone's code and select **Connect Interviewer Audio**. In the browser sharing prompt, choose a tab or system-audio source that contains the interviewer and enable audio sharing.
+5. The laptop companion uploads short speech segments over the app's HTTPS connection. The phone relays them through the existing **/api/transcribe-turn** transcription route. Stop either audio channel independently.
+
+Use a current desktop Chrome browser on Windows for the laptop capture page. The browser only exposes audio sources offered in its screen-sharing prompt; tab audio is the most consistently available option, while full system audio support varies. If the selected source has no audio track, the companion reports that and does not connect. The existing server transcription configuration (including **GEMINI_API_KEY** when using its Gemini fallback) must be available.
+
+Audio segments and pairing state are held in server memory only; recordings are not written to disk. Both devices must reach the same running server instance. A server restart or expired pairing requires creating a new code and reconnecting.

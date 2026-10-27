@@ -247,6 +247,11 @@ function addTranscriptLine(role, utterance) {
   $(target).textContent = transcript.join('\n');
   $(target).parentElement.hidden = false;
 }
+function isRepeatedInterviewerTurn(utterance) {
+  const normalize = (text) => text.toLowerCase().replace(/[^a-z0-9+#]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const current = normalize(utterance);
+  return Boolean(current && interviewerTranscript.some((item) => normalize(item) === current));
+}
 function resetSpeakerTranscripts() {
   interviewerTranscript = [];
   candidateTranscript = [];
@@ -274,7 +279,7 @@ try {
 fields.forEach((id) => $(id).addEventListener('input', saveContext));
 ['mode', 'style'].forEach((id) => $(id).addEventListener('change', saveContext));
 
-async function generate({ live = false, includeSessionHistory = false } = {}) {
+async function generate({ live = false, includeSessionHistory = false, statusId = 'micStatus' } = {}) {
   const question = $('question').value.trim();
   if (!question) { $('question').focus(); showToast('Add a question first.'); return; }
   const requestId = live ? ++liveGenerationId : 0;
@@ -287,7 +292,7 @@ async function generate({ live = false, includeSessionHistory = false } = {}) {
       body: JSON.stringify({ question, role: $('role').value, company: $('company').value, profile: $('profile').value, resumeContext: $('resumeContext').value, jobDescription: $('jobDescription').value, mode: $('mode').value, style: $('style').value, ...(live ? { liveSession: true, candidateContext, recentQuestion, lastSuggestion, sessionHistory: includeSessionHistory ? liveAnswerHistory.slice(-4) : [] } : {}) })
     });
     const data = live && response.headers.get('content-type')?.includes('text/event-stream')
-      ? await readSessionTurnStream(response, true)
+      ? await readSessionTurnStream(response, true, statusId)
       : await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not generate a suggestion.');
     if (live && requestId !== liveGenerationId) return true;
@@ -363,7 +368,7 @@ function partialJsonStringValue(source, key) {
   if (escaped) return '';
   try { return JSON.parse('"' + raw + '"'); } catch { return ''; }
 }
-async function readSessionTurnStream(response, liveAnswer = false) {
+async function readSessionTurnStream(response, liveAnswer = false, statusId = 'micStatus') {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -397,7 +402,7 @@ async function readSessionTurnStream(response, liveAnswer = false) {
         $('answerText').textContent = partialAnswer;
         $('answerContent').hidden = false;
         $('answerEmpty').hidden = true;
-        $('micStatus').textContent = 'Answer arriving…';
+        $(statusId).textContent = 'Answer arriving…';
       }
     }
   };
@@ -430,6 +435,18 @@ async function classifySessionTurn(utterance, source = 'browser') {
   // the candidate transcript. They must not trigger an unsolicited new answer.
   if (soundsLikeCandidateAcknowledgment(utterance)) {
     recordCandidateSpeech(utterance, true);
+    return;
+  }
+  if (interviewerAudioPairId && isRepeatedInterviewerTurn(utterance)) {
+    $('micStatus').textContent = 'That interviewer question was already captured. Listening for the next turn.';
+    return;
+  }
+  // While the phone is paired to the laptop's interviewer-only channel, the
+  // phone microphone is reserved for candidate speech. The laptop source is
+  // the authoritative interviewer channel, preventing answer read-aloud from
+  // replacing the current suggestion.
+  if (interviewerAudioPairId && source !== 'system-audio') {
+    recordCandidateSpeech(utterance);
     return;
   }
   if (Date.now() - lastReadbackAt < 12_000 && !isLikelyInterviewQuestion(utterance) && !isFollowUp) {
@@ -553,6 +570,123 @@ function resetTranscriptionSession() {
   $('question').value = ''; $('transcriptCorrection').hidden = true;
   $('answerContent').hidden = true; $('answerEmpty').hidden = false;
 }
+
+const interviewerAudioBtn = $('interviewerAudioBtn');
+let interviewerAudioPairId = '';
+let interviewerAudioPollTimer = null;
+let interviewerAudioStopping = false;
+let interviewerAudioTurnQueue = Promise.resolve();
+
+async function interviewerAudioRequest(action, details = {}) {
+  const response = await apiFetch('/api/interviewer-audio-pair', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action, ...details })
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Interviewer audio connection failed.');
+  return data;
+}
+
+async function transcribeLaptopInterviewerAudio(audio) {
+  try {
+    const response = await apiFetch('/api/transcribe-turn', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        audioData: audio.audioData,
+        audioMimeType: audio.audioMimeType,
+        role: $('role').value,
+        profile: $('profile').value,
+        resumeContext: $('resumeContext').value,
+        jobDescription: $('jobDescription').value
+      })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not transcribe laptop audio.');
+    const utterance = correctDomainSpeechTerms(typeof result.transcript === 'string' ? result.transcript.trim() : '');
+    if (!utterance) {
+      $('interviewerAudioStatus').textContent = 'Laptop audio received; no clear words recognized. Still listening.';
+      return;
+    }
+    interviewerAudioTurnQueue = interviewerAudioTurnQueue.then(async () => {
+      if (!interviewerAudioPairId) return;
+      if (isRepeatedInterviewerTurn(utterance)) {
+        $('interviewerAudioStatus').textContent = 'This question was already captured from the other audio channel.';
+        return;
+      }
+      addTranscriptLine('interviewer', utterance);
+      $('question').value = utterance;
+      $('transcriptCorrection').hidden = true;
+      const isFollowUp = isContextualFollowUp(utterance);
+      if (!isFollowUp) {
+        liveAnswerHistory = [];
+        recentQuestion = utterance;
+      }
+      $('interviewerAudioStatus').textContent = 'Interviewer question recognized; generating answer…';
+      const generated = await generate({ live: true, includeSessionHistory: isFollowUp, statusId: 'interviewerAudioStatus' });
+      if (interviewerAudioPairId) $('interviewerAudioStatus').textContent = generated
+        ? 'Connected · listening for the interviewer.'
+        : 'Question recognized, but an answer could not be generated. Still listening.';
+    }).catch((error) => {
+      if (interviewerAudioPairId) $('interviewerAudioStatus').textContent = error.message || 'Could not process the interviewer turn.';
+    });
+    await interviewerAudioTurnQueue;
+  } catch (error) {
+    if (interviewerAudioPairId) $('interviewerAudioStatus').textContent = error.message || 'Laptop audio transcription failed.';
+  }
+}
+
+async function pollLaptopInterviewerAudio() {
+  if (!interviewerAudioPairId || interviewerAudioStopping) return;
+  try {
+    const result = await interviewerAudioRequest('poll', { id: interviewerAudioPairId });
+    if (!interviewerAudioPairId || interviewerAudioStopping) return;
+    if (!result.connected) $('interviewerAudioStatus').textContent = 'Waiting for the laptop companion to connect…';
+    else if (result.audio) {
+      $('interviewerAudioStatus').textContent = 'Interviewer audio received · transcribing…';
+      await transcribeLaptopInterviewerAudio(result.audio);
+    } else $('interviewerAudioStatus').textContent = 'Connected · listening for the interviewer.';
+  } catch (error) {
+    if (interviewerAudioPairId && !interviewerAudioStopping) $('interviewerAudioStatus').textContent = 'Connection interrupted · reconnecting (' + (error.message || 'network error') + ')…';
+  }
+  if (interviewerAudioPairId && !interviewerAudioStopping) interviewerAudioPollTimer = setTimeout(pollLaptopInterviewerAudio, 750);
+}
+
+async function stopLaptopInterviewerAudio(updateServer = true) {
+  interviewerAudioStopping = true;
+  if (interviewerAudioPollTimer) clearTimeout(interviewerAudioPollTimer);
+  interviewerAudioPollTimer = null;
+  const pairId = interviewerAudioPairId;
+  interviewerAudioPairId = '';
+  $('interviewerAudioCode').hidden = true;
+  $('interviewerAudioCode').textContent = '';
+  interviewerAudioBtn.textContent = 'Connect laptop audio';
+  if (updateServer && pairId) {
+    try { await interviewerAudioRequest('stop', { id: pairId, role: 'phone' }); } catch { /* The pairing may already have expired. */ }
+  }
+  interviewerAudioStopping = false;
+  $('interviewerAudioStatus').textContent = 'Laptop interviewer audio disconnected. The phone microphone is unchanged.';
+}
+
+interviewerAudioBtn.addEventListener('click', async () => {
+  if (interviewerAudioPairId) { await stopLaptopInterviewerAudio(); return; }
+  interviewerAudioBtn.disabled = true;
+  $('interviewerAudioStatus').textContent = 'Creating a secure one-time pairing code…';
+  try {
+    const pair = await interviewerAudioRequest('create');
+    interviewerAudioPairId = pair.id;
+    $('interviewerAudioCode').textContent = 'Pairing code: ' + pair.code;
+    $('interviewerAudioCode').hidden = false;
+    interviewerAudioBtn.textContent = 'Disconnect laptop audio';
+    $('interviewerAudioStatus').textContent = 'Open the companion page on your laptop, enter this code, and share a tab or system audio.';
+    pollLaptopInterviewerAudio();
+  } catch (error) {
+    $('interviewerAudioStatus').textContent = error.message || 'Could not create the laptop audio connection.';
+  } finally {
+    interviewerAudioBtn.disabled = false;
+  }
+});
 
 function stopSystemAudioSession(message = 'System audio session stopped.') {
   if (!systemAudioActive) return;

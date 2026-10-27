@@ -44,6 +44,12 @@
         </div>
         <div class="card question-card"><div class="section-head"><div><span class="step">02</span><h2>The question</h2></div><button class="text-button" id="clearBtn">Clear</button></div>
           <label class="sr-only" for="question">Interview question</label><textarea id="question" class="question-input" rows="5" placeholder="Type or dictate an interview question…"></textarea><div id="transcriptCorrection" class="transcript-correction" hidden></div>
+          <div class="interviewer-audio card" aria-label="Laptop interviewer audio">
+            <div class="interviewer-audio-heading"><strong>Interviewer audio from laptop</strong><button id="interviewerAudioBtn" class="mic-button" type="button">Connect laptop audio</button></div>
+            <div id="interviewerAudioStatus" class="muted" role="status" aria-live="polite">Connect this phone to a laptop companion page to transcribe the interviewer separately.</div>
+            <div id="interviewerAudioCode" class="pair-code" hidden></div>
+            <a class="companion-link" href="/companion" target="_blank" rel="noopener">Open laptop companion page</a>
+          </div>
           <div class="input-footer"><button id="micBtn" class="mic-button" aria-pressed="false"><span>●</span> Start session</button><button id="systemAudioBtn" class="mic-button" aria-pressed="false" type="button">Start System Audio</button><span id="micStatus" class="muted">Starts continuous listening. Stop the session when finished.</span></div>
           <div class="speaker-transcripts" aria-live="polite" aria-label="Live speaker transcripts">
             <div id="interviewerTranscriptPanel" class="speaker-transcript" hidden><strong>Interviewer</strong><p id="interviewerTranscript"></p></div>
