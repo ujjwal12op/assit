@@ -65,5 +65,45 @@
       && /\b(?:you(?:'re| are) saying|you(?:'re| are) correct|that(?:'s| is) correct|i agree|makes sense|as you said|as you mentioned|that is right|that sounds right)\b/.test(text);
   }
 
-  return { merge, normalize, looksLikeReadback, looksLikeCandidateAcknowledgment };
+  function isActionableInterviewerPrompt(utterance) {
+    const original = String(utterance || '').trim();
+    if (!original) return false;
+    const text = original.toLowerCase()
+      .replace(/^(?:(?:um|uh|hmm+|mm(?:-hmm)?|so|okay|ok|well|and|right|next|now|then|actually|instead|yes|yeah|no|sure|thanks|thank you|great|perfect)[,\s]+)+/i, '')
+      .replace(/[\s.!?,;:]+$/g, '')
+      .trim();
+    const clean = normalize(text);
+    if (!clean) return false;
+
+    // Strip only turns that are acknowledgements by themselves. Prefixes such
+    // as "okay" and "right" are allowed before an actual next prompt.
+    const acknowledgments = new Set([
+      'hmm', 'mm', 'mm hmm', 'uh huh', 'okay', 'ok', 'right', 'alright',
+      'yeah', 'yes', 'exactly', 'correct', 'sure', 'i see', 'got it',
+      'makes sense', 'understood', 'great', 'perfect', 'thank you', 'thanks',
+      'cool', 'interesting', 'sounds good', 'fair enough'
+    ]);
+    if (acknowledgments.has(clean)) return false;
+
+    const asksDirectQuestion = /^(?:what|why|how|when|where|who|which)\b/i.test(text)
+      || /^(?:can|could|would|will|should|do|does|did|is|are|have|has)\b/i.test(text)
+      || /\b(?:can|could|would|will|should)\s+you\b/i.test(text)
+      || /\b(?:what|why|how|when|where|who|which)\s+(?:is|are|was|were|do|does|did|can|could|would|should|will|has|have)\b/i.test(text)
+      || /^(?:what about|how about|what if|how so|why so)\b/i.test(text);
+    const givesTask = /^(?:please\s+)?(?:tell|show|give|walk|talk|explain|describe|compare|write|implement|solve|calculate|apply|use|find|create|return|define|list|demonstrate|provide|generate|build|design|outline|try|consider|suppose)\b/i.test(text)
+      || /^(?:let(?:'|’)?s)\s+(?:use|apply|try|write|find|solve|implement|calculate|compare|explain|design|build|create)\b/i.test(text)
+      || /^(?:do|use|apply|write|show|give|find|solve|implement|calculate|compare|explain)\s+(?:it|that|this|the|a|an|another|same)\b/i.test(text)
+      || /\b(?:same|previous|this|that)\s+(?:question|query|problem|one)\b.{0,70}\b(?:use|apply|write|show|give|find|solve|implement|calculate|return|create|build)\b/i.test(text)
+      || /^(?:i(?:'d| would) like you to|i (?:want|need) you to|i was hoping you could)\b.{0,50}\b(?:tell|show|give|explain|describe|compare|write|implement|solve|calculate|apply|use|find|create|return|define|list|provide|generate|build|design|try)\b/i.test(text)
+      || /^(?:your task is|the task is)\b.{0,70}\b(?:tell|show|give|explain|describe|compare|write|implement|solve|calculate|apply|use|find|create|return|define|list|provide|generate|build|design|try)\b/i.test(text)
+      || /\b(?:same|previous|above|current)\s+(?:question|query|problem|code|answer|solution)\b.{0,60}\b(?:using|with|via)\b/i.test(text);
+    if (asksDirectQuestion || givesTask) return true;
+    if (looksLikeCandidateAcknowledgment(original)) return false;
+
+    // A complete, non-trivial utterance ending as a question is also actionable
+    // (e.g. "Your thoughts on the trade-off?"). Bare "hmm?" stays an ack above.
+    return text.length >= 10 && /\?\s*$/.test(original);
+  }
+
+  return { merge, normalize, looksLikeReadback, looksLikeCandidateAcknowledgment, isActionableInterviewerPrompt };
 });

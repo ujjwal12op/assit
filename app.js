@@ -616,6 +616,13 @@ async function transcribeLaptopInterviewerAudio(audio) {
         return;
       }
       addTranscriptLine('interviewer', utterance);
+      const actionablePrompt = speechBuffer.isActionableInterviewerPrompt(utterance)
+        || isClearInterviewerFollowUp(utterance)
+        || isContextualFollowUp(utterance);
+      if (!actionablePrompt) {
+        $('interviewerAudioStatus').textContent = 'Interviewer acknowledgment or statement heard · keeping the current answer. Listening for a question or instruction.';
+        return;
+      }
       $('question').value = utterance;
       $('transcriptCorrection').hidden = true;
       const isFollowUp = isContextualFollowUp(utterance);

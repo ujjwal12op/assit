@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { merge, looksLikeReadback, looksLikeCandidateAcknowledgment } = require('./speech-buffer.js');
+const { merge, looksLikeReadback, looksLikeCandidateAcknowledgment, isActionableInterviewerPrompt } = require('./speech-buffer.js');
 
 test('joins final snippets split across recognizer boundaries without losing words', () => {
   assert.equal(merge('Can you find the second highest', 'highest salary using SQL?'), 'Can you find the second highest salary using SQL?');
@@ -25,4 +25,25 @@ test('recognizes answer readbacks even when speech recognition splits them into 
 test('recognizes candidate acknowledgements without swallowing follow-up questions', () => {
   assert.equal(looksLikeCandidateAcknowledgment('Right, you are saying it is correct.'), true);
   assert.equal(looksLikeCandidateAcknowledgment('Right, can you explain that?'), false);
+});
+
+test('keeps the current answer for interviewer acknowledgements and statements', () => {
+  for (const phrase of ['Hmm', 'Hmm, okay', 'Okay', 'Right', 'I see', 'Got it', 'Makes sense', 'That is correct.']) {
+    assert.equal(isActionableInterviewerPrompt(phrase), false, phrase);
+  }
+});
+
+test('recognizes direct questions and actionable follow-up instructions', () => {
+  for (const phrase of [
+    'Could you explain how you cleaned the data?',
+    'Okay, can you use a window function approach?',
+    'Apply the window function and give me the query.',
+    'Let’s use a window function for this one.',
+    'On the same question, apply a window function.',
+    'I want you to show me the query using a window function.',
+    'Same query, but using a window function.',
+    'Your thoughts on that trade-off?'
+  ]) {
+    assert.equal(isActionableInterviewerPrompt(phrase), true, phrase);
+  }
 });
