@@ -302,7 +302,7 @@ const server = createServer(async (req, res) => {
           ? { question, codingRequest, requestedLanguage: requestedLanguage || null, profile: profile.slice(0, 2_000), resumeContext: resumeContext.slice(0, 3_000), jobDescription: jobDescription.slice(0, 1_800), role: role.slice(0, 160), company: company.slice(0, 120), style, mode, candidateStatementsSoFar: candidateContext.slice(-3).map((item) => item.slice(0, 200)), previousInterviewerQuestion: recentQuestion.slice(0, 500), lastCopilotAnswer: lastSuggestion.slice(0, 2_000), sessionAnswerHistory: sessionHistory }
           : { question, profile, resumeContext, jobDescription, role, company, style, mode };
       const wantsStream = (isSessionTurn || isLiveAnswer) && req.headers.accept?.includes('text/event-stream');
-      const requestModel = async (model, stream = false) => fetch(
+      const requestModel = async (model, stream = false, tokenLimit = null, timeoutMs = 18_000) => fetch(
         aiProvider === 'anthropic'
           ? 'https://api.anthropic.com/v1/messages'
           : 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + (stream ? ':streamGenerateContent?alt=sse' : ':generateContent'),
@@ -314,7 +314,7 @@ const server = createServer(async (req, res) => {
           body: JSON.stringify(aiProvider === 'anthropic'
             ? {
                 model,
-                max_tokens: isSessionTurn || isLiveAnswer ? (codingRequest ? 1_000 : 200) : 1_000,
+                max_tokens: tokenLimit || (isSessionTurn || isLiveAnswer ? (codingRequest ? 1_000 : 400) : 1_000),
                 system: effectiveSystemText,
                 messages: [{ role: 'user', content: JSON.stringify(promptData) }],
                 ...(stream ? { stream: true } : {})
@@ -323,12 +323,12 @@ const server = createServer(async (req, res) => {
                 systemInstruction: { parts: [{ text: effectiveSystemText }] },
                 contents: [{ role: 'user', parts: [{ text: JSON.stringify(promptData) }] }],
                 generationConfig: {
-                  maxOutputTokens: isSessionTurn || isLiveAnswer ? (codingRequest ? 1_000 : 200) : 1_000,
+                  maxOutputTokens: tokenLimit || (isSessionTurn || isLiveAnswer ? (codingRequest ? 1_000 : 400) : 1_000),
                   responseMimeType: 'application/json',
                   thinkingConfig: { thinkingLevel: 'minimal' }
                 }
               }),
-          signal: AbortSignal.timeout(18_000)
+          signal: AbortSignal.timeout(timeoutMs)
         }
       );
       let response;
@@ -385,6 +385,7 @@ const server = createServer(async (req, res) => {
             sendEvent('delta', { text });
           }
         };
+        let streamReadError = null;
         try {
           while (true) {
             const { value, done } = await reader.read();
@@ -397,16 +398,33 @@ const server = createServer(async (req, res) => {
           buffer += decoder.decode();
           if (buffer) handleLine(buffer);
         } catch (error) {
-          sendEvent('error', { error: error.name === 'TimeoutError' ? 'The answer stream timed out. Please retry.' : 'The answer stream was interrupted. Please retry.' });
-          res.end();
-          return;
+          streamReadError = error;
         }
-        let result;
-        try { result = parseModelJson(generated); }
-        catch {
-          sendEvent('error', { error: 'The answer provider returned an incomplete response. Please retry.' });
-          res.end();
-          return;
+        let result = null;
+        if (!streamReadError) {
+          try { result = parseModelJson(generated); } catch { /* Recover below with a complete non-stream response. */ }
+        }
+        if (!result) {
+          try {
+            // A broken SSE connection or truncated JSON should not discard an
+            // answer in an active interview. Retry once without streaming and
+            // allow a little more room for the structured response.
+            const recoveryModel = fallbackModel || primaryModel;
+            const recoveryResponse = await requestModel(recoveryModel, false, codingRequest ? 1_600 : 600, 12_000);
+            if (!recoveryResponse.ok) throw new Error('Recovery request failed.');
+            const recoveryPayload = await recoveryResponse.json();
+            const recoveryText = aiProvider === 'anthropic'
+              ? recoveryPayload.content?.filter((part) => part.type === 'text').map((part) => part.text || '').join('')
+              : recoveryPayload.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('');
+            result = parseModelJson(recoveryText);
+          } catch {
+            const recoveryMessage = streamReadError?.name === 'TimeoutError'
+              ? 'The answer timed out, and automatic recovery could not finish. Please repeat the question.'
+              : 'The answer was interrupted, and automatic recovery could not finish. Please repeat the question.';
+            sendEvent('error', { error: recoveryMessage });
+            res.end();
+            return;
+          }
         }
         result = enforceSecondHighestSalaryWindowQuery(result, { isLiveAnswer, codingRequest, requestedLanguage, recentQuestion, question, sessionHistory });
         if (!isSessionTurn) {
