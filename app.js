@@ -1,6 +1,8 @@
 const $ = (id) => document.getElementById(id);
 const speechBuffer = window.SpeechBuffer;
-const sessionTurnDebounceMs = 300;
+// Give consecutive final ASR fragments time to join into a complete sentence,
+// while still settling well before a follow-up spoken about a second later.
+const sessionTurnDebounceMs = 650;
 const mobileAudioEndSilenceMs = 850;
 const systemAudioEndSilenceMs = 850;
 const fields = ['role', 'company', 'profile', 'mode', 'style'];
