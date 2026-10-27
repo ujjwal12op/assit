@@ -272,7 +272,7 @@ const server = createServer(async (req, res) => {
         && /\b(?:explain|clarify|elaborate|how|why|what does|what do you mean|where|when)\b/i.test(question)
         && !codingFollowUp
         && !/\b(?:write|generate|provide|create|build|implement|solve|return|fix|rewrite|optimize|improve|another|new)\b/i.test(question);
-      const codingRequest = isLiveAnswer && !followUpExplanation && (followsPriorCodingTask || codingFollowUp || isImplementationRequest(question) || /\b(?:code|coding|query|function|program|script|algorithm|implement(?:ation)?|array|linked\s+list|binary\s+tree|data\s+structure|dynamic\s+programming|time\s+complexity|space\s+complexity|select|join|group\s+by)\b|\b(?:write|solve|find|return|build|create|design)\s+(?:a\s+|an\s+|the\s+)?(?:function|query|program|script|code|class|algorithm|solution|array|list|tree|problem)\b/i.test(question) || Boolean(requestedLanguage && /\b(?:write|generate|provide|show|implement|create|build|solve|return|function|script|query|solution|sort|reverse|parse|calculate|merge|convert|search|use|apply)\b/i.test(question)));
+      const codingRequest = isLiveAnswer && !followUpExplanation && (followsPriorCodingTask || codingFollowUp || isImplementationRequest(question) || /\b(?:code|coding|query|function|program|script|algorithm|implement(?:ation)?|array|linked\s+list|binary\s+tree|data\s+structure|dynamic\s+programming|time\s+complexity|space\s+complexity|select|join|group\s+by)\b|\b(?:write|solve|find|return|build|create|design)\s+(?:a\s+|an\s+|the\s+)?(?:function|query|program|script|code|class|algorithm|solution|array|list|tree|problem)\b/i.test(question) || Boolean(requestedLanguage && /\b(?:write|generate|provide|show|implement|create|build|solve|return|function|script|query|solution|sort|reverse|parse|calculate|merge|convert|search|use|apply|execute|run)\b/i.test(question)));
       const started = Date.now();
       const primaryModel = aiModel;
       const fallbackModel = aiFallbackModel;
@@ -314,7 +314,7 @@ const server = createServer(async (req, res) => {
           body: JSON.stringify(aiProvider === 'anthropic'
             ? {
                 model,
-                max_tokens: tokenLimit || (isSessionTurn || isLiveAnswer ? (codingRequest ? 1_000 : 400) : 1_000),
+                max_tokens: tokenLimit || (isSessionTurn || isLiveAnswer ? (codingRequest ? 1_800 : 400) : 1_000),
                 system: effectiveSystemText,
                 messages: [{ role: 'user', content: JSON.stringify(promptData) }],
                 ...(stream ? { stream: true } : {})
@@ -323,7 +323,7 @@ const server = createServer(async (req, res) => {
                 systemInstruction: { parts: [{ text: effectiveSystemText }] },
                 contents: [{ role: 'user', parts: [{ text: JSON.stringify(promptData) }] }],
                 generationConfig: {
-                  maxOutputTokens: tokenLimit || (isSessionTurn || isLiveAnswer ? (codingRequest ? 1_000 : 400) : 1_000),
+                  maxOutputTokens: tokenLimit || (isSessionTurn || isLiveAnswer ? (codingRequest ? 1_800 : 400) : 1_000),
                   responseMimeType: 'application/json',
                   thinkingConfig: { thinkingLevel: 'minimal' }
                 }
@@ -407,16 +407,22 @@ const server = createServer(async (req, res) => {
         if (!result) {
           try {
             // A broken SSE connection or truncated JSON should not discard an
-            // answer in an active interview. Retry once without streaming and
-            // allow a little more room for the structured response.
-            const recoveryModel = fallbackModel || primaryModel;
-            const recoveryResponse = await requestModel(recoveryModel, false, codingRequest ? 1_600 : 600, 12_000);
-            if (!recoveryResponse.ok) throw new Error('Recovery request failed.');
-            const recoveryPayload = await recoveryResponse.json();
-            const recoveryText = aiProvider === 'anthropic'
-              ? recoveryPayload.content?.filter((part) => part.type === 'text').map((part) => part.text || '').join('')
-              : recoveryPayload.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('');
-            result = parseModelJson(recoveryText);
+            // answer in an active interview. Retry without streaming and allow
+            // more room for structured code responses.
+            const recoveryModels = [...new Set([primaryModel, fallbackModel].filter(Boolean))];
+            for (const recoveryModel of recoveryModels) {
+              try {
+                const recoveryResponse = await requestModel(recoveryModel, false, codingRequest ? 2_400 : 700, codingRequest ? 24_000 : 16_000);
+                if (!recoveryResponse.ok) continue;
+                const recoveryPayload = await recoveryResponse.json();
+                const recoveryText = aiProvider === 'anthropic'
+                  ? recoveryPayload.content?.filter((part) => part.type === 'text').map((part) => part.text || '').join('')
+                  : recoveryPayload.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('');
+                result = parseModelJson(recoveryText);
+                break;
+              } catch { /* Try the configured fallback model before giving up. */ }
+            }
+            if (!result) throw new Error('All answer recovery attempts failed.');
           } catch {
             const recoveryMessage = streamReadError?.name === 'TimeoutError'
               ? 'The answer timed out, and automatic recovery could not finish. Please repeat the question.'
