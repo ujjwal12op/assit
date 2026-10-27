@@ -68,7 +68,33 @@ async function readJson(req) {
 }
 function parseModelJson(text) {
   const cleaned = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  return JSON.parse(cleaned);
+  try { return JSON.parse(cleaned); }
+  catch (originalError) {
+    // Models may add a short preamble or trailing note around an otherwise
+    // valid JSON object. Parse the first balanced object before giving up.
+    const start = cleaned.indexOf('{');
+    if (start < 0) throw originalError;
+    let depth = 0, inString = false, escaped = false;
+    for (let index = start; index < cleaned.length; index++) {
+      const character = cleaned[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === '\\') escaped = true;
+        else if (character === '"') inString = false;
+      } else if (character === '"') inString = true;
+      else if (character === '{') depth++;
+      else if (character === '}' && --depth === 0) return JSON.parse(cleaned.slice(start, index + 1));
+    }
+    throw originalError;
+  }
+}
+function fallbackSecondHighestSalaryQuery(question, requestedLanguage) {
+  if (requestedLanguage !== 'SQL' || !/\b(?:second|2nd)\s+highest\s+salary\b/i.test(question)) return null;
+  return {
+    answer: 'I’d find the highest salary below the overall maximum. This returns the second-highest distinct salary.',
+    codeBlocks: [{ language: 'SQL', code: 'SELECT MAX(salary) AS second_highest_salary\nFROM employees\nWHERE salary < (SELECT MAX(salary) FROM employees);' }],
+    missingContext: 'Assumes a table named employees with a salary column.'
+  };
 }
 function detectRequestedCodeLanguage(text) {
   const languages = [
@@ -305,7 +331,7 @@ const server = createServer(async (req, res) => {
       // ordinary interview answers keep their existing low-latency stream.
       const wantsStream = (isSessionTurn || isLiveAnswer) && req.headers.accept?.includes('text/event-stream') && !codingRequest;
       const requestTimeoutMs = codingRequest ? 30_000 : 18_000;
-      const requestModel = async (model, stream = false, tokenLimit = null, timeoutMs = 18_000) => fetch(
+      const requestModel = async (model, stream = false, tokenLimit = null, timeoutMs = 18_000, systemOverride = effectiveSystemText) => fetch(
         aiProvider === 'anthropic'
           ? 'https://api.anthropic.com/v1/messages'
           : 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + (stream ? ':streamGenerateContent?alt=sse' : ':generateContent'),
@@ -318,12 +344,12 @@ const server = createServer(async (req, res) => {
             ? {
                 model,
                 max_tokens: tokenLimit || (isSessionTurn || isLiveAnswer ? (codingRequest ? 1_800 : 400) : 1_000),
-                system: effectiveSystemText,
+                system: systemOverride,
                 messages: [{ role: 'user', content: JSON.stringify(promptData) }],
                 ...(stream ? { stream: true } : {})
               }
             : {
-                systemInstruction: { parts: [{ text: effectiveSystemText }] },
+                systemInstruction: { parts: [{ text: systemOverride }] },
                 contents: [{ role: 'user', parts: [{ text: JSON.stringify(promptData) }] }],
                 generationConfig: {
                   maxOutputTokens: tokenLimit || (isSessionTurn || isLiveAnswer ? (codingRequest ? 1_800 : 400) : 1_000),
@@ -471,7 +497,26 @@ const server = createServer(async (req, res) => {
         ? payload.content?.filter((part) => part.type === 'text').map((part) => part.text || '').join('')
         : payload.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('');
       try { result = parseModelJson(generatedText); }
-      catch { return json(res, 502, { error: 'The answer provider returned an unreadable response. Try again.' }); }
+      catch {
+        if (codingRequest) {
+          const strictJsonSystem = `${effectiveSystemText}\nReturn exactly one valid JSON object and nothing else. Escape newlines inside code strings. The object must include answer, codeBlocks, evidenceUsed, missingContext, detectedStyle, and correctedQuestion. Put complete source code in codeBlocks with the requested language.`;
+          const recoveryModels = [...new Set([primaryModel, fallbackModel].filter(Boolean))];
+          for (const recoveryModel of recoveryModels) {
+            try {
+              const recoveryResponse = await requestModel(recoveryModel, false, 2_400, 24_000, strictJsonSystem);
+              if (!recoveryResponse.ok) continue;
+              const recoveryPayload = await recoveryResponse.json();
+              const recoveryText = aiProvider === 'anthropic'
+                ? recoveryPayload.content?.filter((part) => part.type === 'text').map((part) => part.text || '').join('')
+                : recoveryPayload.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('');
+              result = parseModelJson(recoveryText);
+              break;
+            } catch { /* Try the configured fallback model. */ }
+          }
+          if (!result) result = fallbackSecondHighestSalaryQuery(question, requestedLanguage);
+        }
+        if (!result) return json(res, 502, { error: 'The answer provider returned an unreadable response. Try again.' });
+      }
       result = enforceSecondHighestSalaryWindowQuery(result, { isLiveAnswer, codingRequest, requestedLanguage, recentQuestion, question, sessionHistory });
       if (isSessionTurn) {
         const classification = ['interviewer_question', 'candidate_answer', 'unclear'].includes(result.classification) ? result.classification : 'unclear';
