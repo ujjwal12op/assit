@@ -1,5 +1,8 @@
 const $ = (id) => document.getElementById(id);
 const speechBuffer = window.SpeechBuffer;
+const sessionTurnDebounceMs = 300;
+const mobileAudioEndSilenceMs = 850;
+const systemAudioEndSilenceMs = 850;
 const fields = ['role', 'company', 'profile', 'mode', 'style'];
 let recognition = null;
 let finalTranscript = '';
@@ -472,7 +475,7 @@ function enqueueSessionTurn(utterance, source = 'browser') {
       $('transcriptCorrection').hidden = false;
     }
     classifySessionTurn(contextCorrectedUtterance, source).catch(() => {});
-  }, 1_000);
+  }, sessionTurnDebounceMs);
 }
 function resetSpeechTurnBuffer() {
   clearTimeout(pendingSessionTurnTimer);
@@ -612,7 +615,7 @@ function monitorSystemAudio() {
   }
   if (systemAudioRecorder?.state === 'recording') {
     const duration = now - systemAudioRecordingAt;
-    if (duration >= 20_000 || (systemAudioSpeechAt && now - systemAudioSpeechAt > 1_500 && duration > 1_200)) stopSystemAudioRecording();
+    if (duration >= 20_000 || (systemAudioSpeechAt && now - systemAudioSpeechAt > systemAudioEndSilenceMs && duration > 750)) stopSystemAudioRecording();
   }
   if (now - systemAudioLastDiagnosticAt > 1_200 && $('micStatus').textContent !== 'Transcribing system audio…') {
     systemAudioLastDiagnosticAt = now;
@@ -829,7 +832,7 @@ if (mobileBrowser && SpeechRecognition) {
     if (level > 0.006) { mobileSpeechAt = now; if (mobileRecorder?.state !== 'recording') startMobileRecording(); }
     if (mobileRecorder?.state === 'recording') {
       const duration = now - mobileRecordingAt;
-      if (duration > 30_000 || (mobileSpeechAt && now - mobileSpeechAt > 2_400 && duration > 1_800)) stopMobileRecording();
+      if (duration > 30_000 || (mobileSpeechAt && now - mobileSpeechAt > mobileAudioEndSilenceMs && duration > 750)) stopMobileRecording();
     }
     if (now - mobileLastDiagnosticAt > 1_000 && $('micStatus').textContent !== 'Transcribing speech…') {
       mobileLastDiagnosticAt = now;
